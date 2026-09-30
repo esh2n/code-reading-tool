@@ -1,0 +1,53 @@
+{"Time":"2026-09-30T22:48:37.902026+09:00","Action":"start","Package":"example.com/copyrace"}
+{"Time":"2026-09-30T22:48:38.064093+09:00","Action":"run","Package":"example.com/copyrace","Test":"TestCrtS3"}
+{"Time":"2026-09-30T22:48:38.064174+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"=== RUN   TestCrtS3\n"}
+{"Time":"2026-09-30T22:48:38.064493+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"==================\n"}
+{"Time":"2026-09-30T22:48:38.064504+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"WARNING: DATA RACE\n"}
+{"Time":"2026-09-30T22:48:38.064509+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"Read at 0x00c000014180 by goroutine 8:\n"}
+{"Time":"2026-09-30T22:48:38.064515+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.(*Context).Param()\n"}
+{"Time":"2026-09-30T22:48:38.064519+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/context.go:52 +0x128\n"}
+{"Time":"2026-09-30T22:48:38.064527+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.TestCrtS3.func1()\n"}
+{"Time":"2026-09-30T22:48:38.064531+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/crt_s3_test.go:17 +0x18c\n"}
+{"Time":"2026-09-30T22:48:38.064535+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"\n"}
+{"Time":"2026-09-30T22:48:38.064539+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"Previous write at 0x00c000014180 by goroutine 7:\n"}
+{"Time":"2026-09-30T22:48:38.064543+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.(*Context).reset()\n"}
+{"Time":"2026-09-30T22:48:38.064546+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/context.go:34 +0x144\n"}
+{"Time":"2026-09-30T22:48:38.06455+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.Release()\n"}
+{"Time":"2026-09-30T22:48:38.064553+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/context.go:28 +0x74\n"}
+{"Time":"2026-09-30T22:48:38.064566+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.TestCrtS3()\n"}
+{"Time":"2026-09-30T22:48:38.064571+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/crt_s3_test.go:19 +0x4f0\n"}
+{"Time":"2026-09-30T22:48:38.064575+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.tRunner()\n"}
+{"Time":"2026-09-30T22:48:38.064578+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2036 +0x164\n"}
+{"Time":"2026-09-30T22:48:38.064581+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.(*T).Run.gowrap1()\n"}
+{"Time":"2026-09-30T22:48:38.064585+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2101 +0x34\n"}
+{"Time":"2026-09-30T22:48:38.064588+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"\n"}
+{"Time":"2026-09-30T22:48:38.064591+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"Goroutine 8 (running) created at:\n"}
+{"Time":"2026-09-30T22:48:38.064615+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  example.com/copyrace.TestCrtS3()\n"}
+{"Time":"2026-09-30T22:48:38.064619+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <repo>/testdata/go/copyrace/crt_s3_test.go:15 +0x4e8\n"}
+{"Time":"2026-09-30T22:48:38.064622+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.tRunner()\n"}
+{"Time":"2026-09-30T22:48:38.064624+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2036 +0x164\n"}
+{"Time":"2026-09-30T22:48:38.064627+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.(*T).Run.gowrap1()\n"}
+{"Time":"2026-09-30T22:48:38.06463+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2101 +0x34\n"}
+{"Time":"2026-09-30T22:48:38.064632+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"\n"}
+{"Time":"2026-09-30T22:48:38.064635+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"Goroutine 7 (running) created at:\n"}
+{"Time":"2026-09-30T22:48:38.064637+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.(*T).Run()\n"}
+{"Time":"2026-09-30T22:48:38.06464+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2101 +0x7bc\n"}
+{"Time":"2026-09-30T22:48:38.064642+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.runTests.func1()\n"}
+{"Time":"2026-09-30T22:48:38.064645+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2585 +0x78\n"}
+{"Time":"2026-09-30T22:48:38.064647+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.tRunner()\n"}
+{"Time":"2026-09-30T22:48:38.06465+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2036 +0x164\n"}
+{"Time":"2026-09-30T22:48:38.064652+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.runTests()\n"}
+{"Time":"2026-09-30T22:48:38.064655+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2583 +0x7a0\n"}
+{"Time":"2026-09-30T22:48:38.064657+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  testing.(*M).Run()\n"}
+{"Time":"2026-09-30T22:48:38.06466+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      <home>/.local/share/mise/installs/go/1.26.2/src/testing/testing.go:2443 +0xb38\n"}
+{"Time":"2026-09-30T22:48:38.064662+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"  main.main()\n"}
+{"Time":"2026-09-30T22:48:38.064665+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"      _testmain.go:60 +0x100\n"}
+{"Time":"2026-09-30T22:48:38.064667+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"==================\n"}
+{"Time":"2026-09-30T22:48:38.064676+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"    crt_s3_test.go:17: cp.Param(\"id\") = \"\"\n"}
+{"Time":"2026-09-30T22:48:38.06468+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"    testing.go:1712: race detected during execution of test\n"}
+{"Time":"2026-09-30T22:48:38.064692+09:00","Action":"output","Package":"example.com/copyrace","Test":"TestCrtS3","Output":"--- FAIL: TestCrtS3 (0.00s)\n"}
+{"Time":"2026-09-30T22:48:38.064702+09:00","Action":"fail","Package":"example.com/copyrace","Test":"TestCrtS3","Elapsed":0}
+{"Time":"2026-09-30T22:48:38.064707+09:00","Action":"output","Package":"example.com/copyrace","Output":"FAIL\n"}
+{"Time":"2026-09-30T22:48:38.066194+09:00","Action":"output","Package":"example.com/copyrace","Output":"coverage: 89.5% of statements\n"}
+{"Time":"2026-09-30T22:48:38.066924+09:00","Action":"output","Package":"example.com/copyrace","Output":"FAIL\texample.com/copyrace\t0.165s\n"}
+{"Time":"2026-09-30T22:48:38.066934+09:00","Action":"fail","Package":"example.com/copyrace","Elapsed":0.165}
