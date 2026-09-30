@@ -1,0 +1,317 @@
+<title>Reading UI Mocks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@700&display=swap">
+<style>
+/* Layout: one reading column; each layer of the design = one screen mock + a short "how it is delivered" line. Editor screens stay dark in both themes on purpose. */
+:root {
+  --bg: #f3f4f1; --surface: #ffffff; --fg: #1f2421; --muted: #5d665f; --line: #d6dbd4;
+  --accent: #2f7d5b; --accent-soft: #e2efe8;
+  --display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
+  --body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --t-bg: #161a1d; --t-bg2: #1d2226; --t-fg: #d3d7cf; --t-dim: #545c62; --t-num: #5f6a70;
+  --t-kw: #c792ea; --t-str: #c3e88d; --t-com: #6a7a80; --t-fn: #82aaff; --t-type: #ffcb6b;
+  --t-pass: #8bd49c; --t-fail: #ff6e6e; --t-guess: #e5c07b; --t-sel: #2a3a33; --t-border: #3a4449;
+  --t-status: #2f7d5b; --t-status-fg: #0f1512; --t-note: #7f9a8c;
+  --v-bg: #1e1e1e; --v-bar: #252526; --v-fg: #d4d4d4; --v-note: #8a8a8a; --v-border: #3c3c3c; --v-accent: #3794ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #121614; --surface: #1a1f1c; --fg: #e3e8e4; --muted: #9aa59e; --line: #2c3430; --accent: #6fcf9f; --accent-soft: #1f2e27; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #121614; --surface: #1a1f1c; --fg: #e3e8e4; --muted: #9aa59e; --line: #2c3430; --accent: #6fcf9f; --accent-soft: #1f2e27; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.75; }
+.wrap { max-width: 1060px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; display: grid; gap: 56px; }
+h1, h2 { font-family: var(--display); text-wrap: balance; line-height: 1.35; margin: 0; }
+h1 { font-size: 2rem; }
+h2 { font-size: 1.4rem; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+h2 .tag { font-family: var(--mono); font-size: .85rem; color: var(--accent); letter-spacing: .04em; }
+p { margin: 0; max-width: 70ch; }
+.lede { display: grid; gap: 14px; }
+.lede p { color: var(--muted); }
+code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a { font-size: .9rem; color: var(--fg); text-decoration: none; border: 1px solid var(--line); background: var(--surface); padding: 4px 12px; border-radius: 999px; }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); outline: none; }
+section.layer { display: grid; gap: 16px; scroll-margin-top: 20px; }
+.concept { color: var(--muted); }
+.how { font-size: .88rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.how b { color: var(--fg); font-weight: 500; }
+
+.screen { background: var(--t-bg); color: var(--t-fg); border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; border: 1px solid var(--t-border); }
+.screen pre { margin: 0; font: inherit; white-space: pre; }
+.bar { display: flex; justify-content: space-between; gap: 16px; padding: 3px 12px; background: var(--t-bg2); color: var(--t-num); white-space: pre; min-width: max-content; }
+.bar b { color: var(--t-fg); font-weight: 600; }
+.status { display: flex; background: var(--t-bg2); white-space: pre; min-width: max-content; }
+.status span { padding: 2px 10px; }
+.status .mode { background: var(--t-status); color: var(--t-status-fg); font-weight: 600; }
+.status .fill { flex: 1; }
+.body { padding: 8px 0; min-width: max-content; }
+.ln { display: block; padding-right: 16px; }
+.ln .sg { display: inline-block; width: 2ch; text-align: center; }
+.ln .no { display: inline-block; width: 4ch; text-align: right; color: var(--t-num); margin-right: 1.5ch; }
+.ln .src { display: inline-block; min-width: 38ch; }
+.ln.dim .src, .ln.dim .src * { color: var(--t-dim) !important; }
+.ln.cur { background: var(--t-sel); }
+.vt { margin-left: 2ch; color: var(--t-note); }
+.vt .ok { color: var(--t-pass); } .vt .ng { color: var(--t-fail); } .vt .gs { color: var(--t-guess); }
+.kw { color: var(--t-kw); } .str { color: var(--t-str); } .com { color: var(--t-com); font-style: italic; } .fn { color: var(--t-fn); } .ty { color: var(--t-type); }
+.pass { color: var(--t-pass); } .fail { color: var(--t-fail); } .guess { color: var(--t-guess); } .dimt { color: var(--t-dim); } .hi { color: var(--t-fg); font-weight: 600; } .note { color: var(--t-note); }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); min-width: 940px; }
+.split > div + div, .split > pre + pre { border-left: 1px solid var(--t-border); }
+.float-host { position: relative; }
+.float { position: absolute; left: 20ch; top: 58px; width: 58ch; background: #20272b; border: 1px solid var(--t-fail); border-radius: 6px; padding: 10px 16px; box-shadow: 0 10px 30px rgb(0 0 0 / .45); white-space: normal; line-height: 1.65; display: grid; gap: 8px; }
+.float .ttl { color: var(--t-fg); font-weight: 600; }
+.float .row { display: grid; grid-template-columns: 6ch 1fr; gap: 4px 10px; }
+.float .keys2 { color: var(--t-dim); }
+.float-spacer { height: 150px; }
+.tabs { display: flex; gap: 6px; padding: 6px 12px 2px; min-width: max-content; }
+.tabs span { padding: 0 8px; border-radius: 4px; color: var(--t-num); }
+.tabs span.on { background: var(--t-sel); color: var(--t-fg); font-weight: 600; }
+
+.vs { background: var(--v-bg); color: var(--v-fg); border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; border: 1px solid var(--v-border); }
+.vs .vtabs { display: flex; background: var(--v-bar); min-width: max-content; }
+.vs .vtabs span { padding: 6px 14px; color: #9d9d9d; border-right: 1px solid var(--v-border); }
+.vs .vtabs span.on { background: var(--v-bg); color: #fff; border-top: 1px solid var(--v-accent); }
+.vs .vt { color: var(--v-note); font-style: italic; }
+.vs .squig { text-decoration: underline wavy var(--t-fail); text-underline-offset: 3px; }
+.vs .hover { position: absolute; left: 14ch; top: 70px; width: 56ch; background: #252526; border: 1px solid #454545; padding: 8px 12px; white-space: normal; line-height: 1.6; display: grid; gap: 6px; box-shadow: 0 6px 20px rgb(0 0 0 / .5); }
+.vs .hover hr { border: 0; border-top: 1px solid #454545; margin: 2px 0; width: 100%; }
+.vs .hover a { color: var(--v-accent); text-decoration: none; }
+.vs .vstatus { display: flex; gap: 16px; background: #007acc; color: #fff; padding: 2px 12px; min-width: max-content; }
+
+.doc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 28px clamp(18px, 4vw, 40px); display: grid; gap: 14px; }
+.doc h3 { font-family: var(--display); font-size: 1.25rem; margin: 0; }
+.doc h4 { font-size: 1rem; margin: 6px 0 0; }
+.doc .meta { font-size: .85rem; color: var(--muted); font-family: var(--mono); }
+.doc .lines { display: grid; gap: 4px; font-size: .92rem; }
+.doc .lines div { display: grid; grid-template-columns: 5ch minmax(0, 1fr); gap: 10px; }
+.doc .lines .n { font-family: var(--mono); color: var(--muted); font-size: .85rem; }
+.cite { font-family: var(--mono); font-size: .75rem; padding: 0 6px; border-radius: 4px; margin-left: 4px; white-space: nowrap; vertical-align: 1px; }
+.cite.ok { background: #dff2e6; color: #1d5e3c; } .cite.ng { background: #fbe1df; color: #8e2a22; } .cite.gs { background: #f7ecd0; color: #7a5a12; }
+
+.arch { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; overflow-x: auto; }
+.maptable { overflow-x: auto; }
+.maptable table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: .9rem; }
+.maptable th, .maptable td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.maptable th { font-size: .78rem; letter-spacing: .06em; color: var(--muted); }
+.maptable td code { white-space: nowrap; }
+.order { display: grid; gap: 8px; counter-reset: step; padding: 0; margin: 0; list-style: none; }
+.order li { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 10px; }
+.order li::before { counter-increment: step; content: counter(step); font-family: var(--mono); color: var(--accent); font-weight: 600; }
+.small { font-size: .82rem; color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header class="lede">
+    <h1>コードを「動き」で読む画面</h1>
+    <p>インライン注釈を土台に、詳細パネルとシナリオモードを重ねる設計です。同じデータを Neovim、VS Code、HTML に出します。題材は gin の <code>(*Context).Copy</code> の修正前の版です。この版には、実際にデータ競合のバグがありました（修正は PR #1841）。</p>
+    <p class="small">モックです。行番号、race の報告、実行回数、値は説明用で、実際に実行した結果ではありません。</p>
+    <nav class="toc" aria-label="移動">
+      <a href="#inline">1 インライン</a><a href="#detail">2 詳細パネル</a><a href="#scenario">3 シナリオモード</a><a href="#vscode">4 VS Code</a><a href="#html">5 HTML</a><a href="#backend">バックエンド</a>
+    </nav>
+  </header>
+
+  <section class="layer" id="inline">
+    <h2><span class="tag">1</span>インライン（いつも出ている）</h2>
+    <p class="concept">行ごとに「この行が何をしているか」を行末に出します。実行で確かめた説明には根拠のシナリオが付きます。確かめていない説明は、推測と分かる色で出します。</p>
+    <div class="screen" id="s-inline"></div>
+    <p class="how"><span><b>K</b> 詳細パネル</span><span><b>&lt;leader&gt;cs</b> シナリオモード</span><span><b>]d</b> 次の問題（race）へ</span><span><b>&lt;leader&gt;ct</b> 注釈の表示を切り替え</span></p>
+  </section>
+
+  <section class="layer" id="detail">
+    <h2><span class="tag">2</span>詳細パネル（知りたいときだけ）</h2>
+    <p class="concept">行の上で <code>K</code> を押すと開きます。その行の詳しい説明、根拠になったシナリオの結果、race の 2 か所を出します。</p>
+    <div class="screen" id="s-detail"></div>
+  </section>
+
+  <section class="layer" id="scenario">
+    <h2><span class="tag">3</span>シナリオモード（別のバッファ）</h2>
+    <p class="concept">1 つのシナリオを選ぶと、左のコードで通った行だけが明るくなります。右のバッファには、そのシナリオで起きたことが順に並びます。race もシナリオの中の出来事として出ます。</p>
+    <div class="screen" id="s-scenario"></div>
+    <p class="how"><span><b>]s</b> <b>[s</b> シナリオを切り替え</span><span><b>&lt;CR&gt;</b> その行へ</span><span><b>o</b> テストの出力</span><span><b>t</b> 生成されたテストを開く</span><span><b>r</b> 再実行</span></p>
+  </section>
+
+  <section class="layer" id="vscode">
+    <h2><span class="tag">4</span>VS Code でも同じ</h2>
+    <p class="concept">データは同じで、見た目だけ VS Code の部品に置き換えます。行末の説明は decoration、詳細は hover、race は波線と Problems パネル、シナリオモードは右に開くパネルで出します。</p>
+    <div class="vs" id="s-vscode"></div>
+  </section>
+
+  <section class="layer" id="html">
+    <h2><span class="tag">5</span>HTML に書き出す</h2>
+    <p class="concept">エディタが無くても読める 1 ページです。PR に貼ったり、人に渡したりするときに使います。agent の skill の出力としても、そのまま使えます。</p>
+    <article class="doc" aria-label="HTML 出力のモック">
+      <h3>(*Context).Copy の動き</h3>
+      <p class="meta">gin @ 35e33d3 · context.go:332–342 · シナリオ 5 本 · go test -race -count=3</p>
+      <h4>行ごと</h4>
+      <div class="lines" id="doc-lines"></div>
+      <h4>シナリオ S4 並行</h4>
+      <p>コピーを goroutine に渡したあと、元の Context がプールに戻って次のリクエストに使われる。reset() が Params を書き換えているあいだに、goroutine がコピーから Param() を読むと競合する。<span class="cite ng">S4 ✗ 3/3 回</span></p>
+    </article>
+  </section>
+
+  <section class="layer" id="backend">
+    <h2><span class="tag">設計</span>バックエンド：1 つの束を 3 つの出口へ</h2>
+    <p class="concept">Rust のコアは「読解の束」という JSON を 1 つ作ります。HTML はその束をテンプレートで描くだけです。エディタには LSP サーバが束を配信します。LSP に元からある部品で足りるところ（race の 2 か所、詳細パネル）はそれを使います。足りないところ（行ごとの説明、シナリオモード）は、独自のリクエストでデータを渡して、エディタ側で描きます。</p>
+    <div class="arch">
+<pre class="mermaid">
+flowchart LR
+  A["agent の skill<br/>シナリオと行ごとの説明を書く"] --> C1
+  subgraph CORE["Rust コア crate"]
+    C1["実行<br/>go test -race -json"] --> C2["突き合わせ<br/>根拠の無い主張を弾く"] --> B[("読解の束<br/>JSON")]
+  end
+  B --> H["cli render<br/>HTML"]
+  B --> L["LSP サーバ<br/>tower-lsp-server"]
+  L --> N["Neovim<br/>Lua"]
+  L --> V["VS Code<br/>TypeScript"]
+</pre>
+    </div>
+    <div class="maptable"><table>
+      <thead><tr><th>画面</th><th>Neovim</th><th>VS Code</th><th>LSP でのやり取り</th></tr></thead>
+      <tbody>
+        <tr><td>1 行ごとの説明</td><td>extmark（行末の virtual text）</td><td>decoration（行末の文字）</td><td>独自のリクエスト <code>codeReading/lineNotes</code></td></tr>
+        <tr><td>race の 2 か所</td><td>diagnostic、<code>gf</code> で相手の場所へ</td><td>波線と Problems パネル</td><td>標準の diagnostics と <code>relatedInformation</code></td></tr>
+        <tr><td>2 詳細パネル</td><td>hover の浮動ウィンドウ</td><td>hover</td><td>標準の <code>textDocument/hover</code></td></tr>
+        <tr><td>3 シナリオモード</td><td>別のバッファと extmark</td><td>webview のパネル</td><td>独自のリクエスト <code>codeReading/scenario</code></td></tr>
+        <tr><td>実行中の表示</td><td>statusline</td><td>ステータスバー</td><td>標準の <code>$/progress</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">行ごとの説明に inlay hint を使わないのは、長い文が切れるからです。VS Code は既定で 1 行 43 文字で切ります。Neovim にも切り詰めの問題の issue が open のまま残っています。</p>
+    <h2 style="font-size:1.1rem">作る順番</h2>
+    <ol class="order">
+      <li><span>コア crate と CLI。シナリオを実行して束を作り、HTML に書き出す。Rust だけで、Neovim は要らない。</span></li>
+      <li><span>LSP サーバ。同じコアを呼ぶ薄い殻にする。ここで async（tokio）を覚える。</span></li>
+      <li><span>Neovim のプラグイン（Lua）。インライン、詳細パネル、シナリオモードの順に作る。</span></li>
+      <li><span>VS Code の拡張（TypeScript）。typos-lsp と同じく、<code>extension.ts</code> 1 ファイルから始める。</span></li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function () {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  function hl(src) {
+    const t = esc(src);
+    if (/^\s*\/\//.test(src)) return '<span class="com">' + t + '</span>';
+    return t
+      .replace(/"([^"]*)"/g, '<span class="str">"$1"</span>')
+      .replace(/\b(func|var|return|for|range|map|go|nil|interface|if)\b/g, '<span class="kw">$1</span>')
+      .replace(/\b(Copy|Param|reset)\b(?=\()/g, '<span class="fn">$1</span>')
+      .replace(/\*?\b(Context)\b/g, '<span class="ty">$&</span>');
+  }
+  const CODE = [
+    [330, "// Copy returns a copy of the current context that can be safely"],
+    [331, "// used outside the request's scope."],
+    [332, "func (c *Context) Copy() *Context {"],
+    [333, "    var cp = *c"],
+    [334, "    cp.writermem.ResponseWriter = nil"],
+    [335, "    cp.Writer = &cp.writermem"],
+    [336, "    cp.index = abortIndex"],
+    [337, "    cp.handlers = nil"],
+    [338, "    cp.Keys = map[string]interface{}{}"],
+    [339, "    for k, v := range c.Keys {"],
+    [340, "        cp.Keys[k] = v"],
+    [341, "    }"],
+    [342, "    return &cp"],
+    [343, "}"]
+  ];
+  // [text, evidence-kind, evidence-label]
+  const NOTES = {
+    332: ["受け取った c とは別の Context を作って返す", "ok", "S1 ✓"],
+    333: ["構造体ごと値でコピー。Params は中身を元と共有する", "ng", "S4 ✗ race"],
+    334: ["コピーからは元のレスポンスに書けなくする", "ok", "S1 ✓"],
+    335: ["Writer をコピー自身の writermem に向け直す", "ok", "S1 ✓"],
+    336: ["index を末尾へ。Next() しても後続は動かない", "gs", "推測"],
+    337: ["後続のハンドラの列を空にする", "ok", "S1 ✓"],
+    338: ["Keys は新しい map。元とは共有しない", "ok", "S3 ✓"],
+    339: ["元の Keys を 1 件ずつ詰め直す", "ok", "S5 ✓"],
+    342: ["コピーへのポインタを返す", "ok", "S1 ✓"]
+  };
+  function vt(n, vs) {
+    const x = NOTES[n];
+    if (!x) return "";
+    return (vs ? " " : "") + x[0] + ' <span class="' + x[1] + '">[' + x[2] + ']</span>';
+  }
+  function line(no, src, o) {
+    o = o || {};
+    const cls = ["ln", o.dim ? "dim" : "", o.cur ? "cur" : ""].join(" ");
+    return '<span class="' + cls + '"><span class="sg">' + (o.sign || " ") + '</span><span class="no">' + no + '</span><span class="src">' + (o.srcHtml || hl(src)) + '</span>' + (o.vt ? '<span class="vt">' + o.vt + '</span>' : '') + '</span>';
+  }
+  const bar = (l, r) => '<div class="bar"><span>' + l + '</span><span>' + r + '</span></div>';
+  const status = (right, extra) => '<div class="status"><span class="mode">NORMAL</span><span> main</span><span>context.go</span><span class="fill"></span>' + (extra || "") + '<span>' + right + '</span></div>';
+  const raceSign = '<span class="fail">●</span>';
+
+  // 1 inline
+  document.getElementById("s-inline").innerHTML =
+    bar('<b> context.go </b>  router.go  tree.go', '注釈 9 行 · 根拠あり 8 · 推測 1 · <span class="fail">race 1</span>') +
+    '<pre class="body">' + CODE.map(([n, s]) => line(n, s, { vt: vt(n), sign: n === 333 ? raceSign : "", cur: n === 333 })).join("") + '</pre>' +
+    status('333:5', '<span class="fail">E 1 </span>');
+
+  // 2 detail
+  const detailCode = CODE.filter(([n]) => n >= 332).map(([n, s]) => line(n, s, { sign: n === 333 ? raceSign : "", cur: n === 333, vt: n === 333 ? vt(n) : "" })).join("");
+  document.getElementById("s-detail").innerHTML =
+    bar('<b> context.go </b>', '詳細  333 行') +
+    '<div class="float-host"><pre class="body">' + detailCode + '</pre><div class="float-spacer"></div>' +
+    '<div class="float">' +
+      '<div class="ttl">333  var cp = *c</div>' +
+      '<div>Context を構造体ごと値でコピーする。Params は <span class="ty">[]Param</span> なので、コピーされるのはスライスのヘッダ（ポインタ・長さ・容量）だけ。中身の配列は元の c と共有する。</div>' +
+      '<div class="row"><span class="dimt">根拠</span><span><span class="fail">S4 並行 ✗ DATA RACE</span>  3 回中 3 回</span>' +
+      '<span class="dimt">書き</span><span>(*Context).reset()  context.go:91</span>' +
+      '<span class="dimt">読み</span><span>(*Context).Param()  context.go:392</span>' +
+      '<span class="dimt">関係</span><span><span class="pass">S1 ✓ S2 ✓</span>  1 リクエストだけなら問題は表に出ない</span></div>' +
+      '<div class="keys2">gf 書き側へ   &lt;CR&gt; S4 をシナリオモードで開く   o テストの出力</div>' +
+    '</div></div>' +
+    status('333:5', '<span class="fail">E 1 </span>');
+
+  // 3 scenario
+  const lit = [332, 333, 334, 335, 336, 337, 338, 339, 341, 342, 343];
+  const scCode = CODE.map(([n, s]) => line(n, s, { dim: !lit.includes(n), cur: n === 333, sign: n === 333 ? raceSign : "" })).join("");
+  const steps = [
+    ['<span class="hi">A</span>', '', '<span class="hi">リクエスト /users/42</span>', ''],
+    [' 1', '332', 'Copy() を呼ぶ', 'c.Params = [id=42]'],
+    [' 2', '333', 'cp = *c', '<span class="guess">cp.Params と c.Params が同じ配列</span>'],
+    [' 3', '338', 'Keys を新しい map に', 'len(cp.Keys) = 0'],
+    [' 4', '339', 'for は 0 回', '340 は通らない'],
+    [' 5', '342', '&amp;cp を goroutine へ渡す', ''],
+    [' 6', '', 'ハンドラが終わり c がプールへ', ''],
+    ['<span class="hi">B</span>', '', '<span class="hi">リクエスト /users/7</span>', '同じ c を再利用'],
+    [' 7', ':91', '<span class="fail">W</span> reset()', 'c.Params = c.Params[0:0]'],
+    ['<span class="hi">A\'</span>', '', '<span class="hi">渡した goroutine</span>', ''],
+    [' 8', ':392', '<span class="pass">R</span> cp.Param("id")', '<span class="fail">7 と同期なしで同じ配列 → DATA RACE</span>']
+  ];
+  const pad = (s, w) => { const plain = s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&"); let width = 0; for (const ch of plain) width += /[　-鿿＀-￯]/.test(ch) ? 2 : 1; return s + " ".repeat(Math.max(1, w - width)); };
+  const panel =
+    '<div class="tabs"><span>S1</span><span>S2</span><span>S3</span><span class="on">S4</span><span>S5</span></div>' +
+    '<pre class="body">' +
+    '<span class="ln"> <span class="hi">S4 並行</span>  コピーを goroutine に渡し、元に次のリクエストが来る</span>' +
+    '<span class="ln"> 結果  <span class="fail">✗ DATA RACE</span>  <span class="dimt">go test -race -count=3 · 3/3 回</span></span>' +
+    '<span class="ln"> </span>' +
+    steps.map((r, i) => '<span class="ln' + (i === 2 ? ' cur' : '') + '"> ' + pad(r[0], 4) + pad('<span class="dimt">' + r[1] + '</span>', 6) + pad(r[2], 26) + '<span class="note">' + r[3] + '</span></span>').join("") +
+    '</pre>';
+  document.getElementById("s-scenario").innerHTML =
+    bar('<b> context.go </b>  │  <b>Scenario: (*Context).Copy</b>', ']s 次  [s 前') +
+    '<div class="split"><pre class="body">' + scCode + '</pre><div>' + panel + '</div></div>' +
+    status('2:1', '<span class="fail">S4 ✗ </span>');
+
+  // 4 vscode
+  const vsLines = CODE.filter(([n]) => n >= 332).map(([n, s]) => {
+    const src = n === 333 ? '    <span class="kw">var</span> <span class="squig">cp = *c</span>' : hl(s);
+    return line(n, s, { srcHtml: src, vt: vt(n, true) });
+  }).join("");
+  document.getElementById("s-vscode").innerHTML =
+    '<div class="vtabs"><span class="on">context.go</span><span>router.go</span><span>Scenario: S4</span></div>' +
+    '<div class="float-host"><pre class="body">' + vsLines + '</pre>' +
+    '<div class="hover"><div><b>333 var cp = *c</b></div><div>Context を値でコピーする。Params はヘッダだけが複製され、中身は元と共有する。</div><hr>' +
+    '<div><span class="fail">S4 並行 ✗ DATA RACE</span> 3/3 回</div><div>書き <a href="#vscode">context.go:91</a> reset() · 読み <a href="#vscode">context.go:392</a> Param()</div>' +
+    '<div><a href="#vscode">シナリオ S4 を開く</a> · <a href="#vscode">テストの出力</a></div></div></div>' +
+    '<div class="vstatus"><span>main</span><span>⊗ 1</span><span>code-reading: 5 シナリオ · 1 件失敗</span></div>';
+
+  // 5 html lines
+  document.getElementById("doc-lines").innerHTML = CODE.filter(([n]) => NOTES[n]).map(([n]) => {
+    const x = NOTES[n];
+    return '<div><span class="n">' + n + '</span><span>' + x[0] + '<span class="cite ' + x[1] + '">' + x[2] + '</span></span></div>';
+  }).join("");
+})();
+</script>
