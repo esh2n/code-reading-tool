@@ -65,7 +65,7 @@ crt render <bundle> --html out.html
 ```
 Bundle
   target: { repo, commit, file, func, range: [start, end], file_hash }
-  llm:    { profile, model }             どの LLM が書いたか
+  llm:    { model }                      どのモデルが書いたか（URL とキーは束に残さない）
   notes:  [LineNote]
   scenarios: [Scenario]
 
@@ -92,28 +92,23 @@ Scenario
 
 ## 4. LLM の呼び出し
 
-- **宛先は OpenAI 互換の Chat Completions API に揃える。** LiteLLM も llama-server もこの形で受ける。一つの形に揃えれば、宛先は URL とモデル名を変えるだけで切り替えられる。
-- 既定の宛先は手元の LiteLLM の `deterministic` ティア。
-- 宛先は設定ファイルのプロファイルで切り替える。
+- **特定の環境を前提にしない。** 特定のプロキシ、ティアの名前、モデル、ポート番号は、コードにも既定値にも入れない。宛先は使う人が与える。
+- **宛先は OpenAI 互換の Chat Completions API に揃える。** 手元で動かす推論サーバもクラウドの API も、多くがこの形で受ける。一つの形に揃えれば、宛先は URL とモデル名だけで決まる。
+- 与え方は 3 つ。上ほど強い。
 
-```toml
-# ~/.config/crt/config.toml（リポジトリ内の .crt.toml で上書きできる）
-default_llm = "local"
+| 項目 | コマンドの引数 | 環境変数 | 設定ファイル |
+|---|---|---|---|
+| 宛先の URL | `--base-url` | `CRT_BASE_URL`、無ければ `OPENAI_BASE_URL` | `base_url` |
+| モデル | `--model` | `CRT_MODEL` | `model` |
+| API キー | （引数では受けない） | `CRT_API_KEY`、無ければ `OPENAI_API_KEY` | `api_key_env`（読む環境変数の名前だけ） |
 
-[llm.local]
-base_url = "http://localhost:4000/v1"
-model = "deterministic"
-api_key_env = "LITELLM_API_KEY"   # キーは環境変数から読む。設定ファイルには書かない
-
-[llm.complex]
-base_url = "http://localhost:4000/v1"
-model = "complex"
-api_key_env = "LITELLM_API_KEY"
-```
-
-- 呼び出し時に `crt read --llm complex ...` で切り替えられる。
-- 出力は JSON Schema を指定した構造化出力で受ける。形が崩れていたら、同じ要求を最大 2 回まで繰り返し、それでも駄目なら止める。
-- 文脈の上限に気をつける。`deterministic` は 1 スロットあたり 65,536 トークン。送るのは対象の関数とその周りだけにする。
+- 設定ファイルは `$XDG_CONFIG_HOME/crt/config.toml`。リポジトリ内の `.crt.toml` で上書きできる。
+- `OPENAI_BASE_URL` と `OPENAI_API_KEY` を読むのは、OpenAI の SDK と同じ名前に合わせるため。すでにこれを設定している人は、何もしなくても動く。
+- 宛先の URL は、どこにも与えられていなければ OpenAI の公開 API にする（SDK の既定と同じ）。
+- モデルは既定値を持たない。どこにも与えられていなければ、与え方を示すエラーで止める。
+- 手元の環境（プロキシやティアの名前）は、使う人の設定ファイルか環境変数に置く。この道具のリポジトリには置かない。
+- 出力は JSON Schema を指定した構造化出力で受ける。形が崩れていたら、同じ要求を最大 2 回まで繰り返し、それでも駄目なら止める。宛先によっては JSON Schema を受け付けない。その場合に、JSON を返すよう指示だけする形へ落とすかは未決。
+- モデルによっては文脈の上限が小さい（数万トークン）。送るのは対象の関数とその周りだけにし、上限は設定（`max_context_tokens`）で与える。
 
 ## 5. 構成とスタック
 
@@ -151,7 +146,7 @@ code-reading-tool/
 |---|---|---|
 | 1 | 束の型と、`go test -json` の読み取り | `testdata/go/copyrace` に `testdata/go/scenarios/copyrace` の手書きのシナリオを overlay で差し込み、束ができる。S1 と S2 は pass、S3 は race になる |
 | 2 | 突き合わせ | 通っていない行を根拠にした説明が「推測」に落ちる（単体テスト） |
-| 3 | LLM の呼び出しと `crt read` | 設定のプロファイルを変えると宛先が変わる。実際に束ができる |
+| 3 | LLM の呼び出しと `crt read` | 引数、環境変数、設定ファイルの優先順位が表のとおりに効く（単体テスト）。実際に束ができる |
 | 4 | `crt render --html` | HTML のスナップショットテストが通る |
 | 5 | 実物で試す | 下の評価 |
 | 6 | LSP、Neovim、VS Code | インライン → 詳細パネル → シナリオモードの順 |
