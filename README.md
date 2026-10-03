@@ -31,6 +31,14 @@ Java, C, C++, C#, Ruby, PHP. Adding one is a row in
 query misses functions or calls, a query file in
 `crates/crt-treesitter/queries/<language>/`.
 
+## Install
+
+- **Nix**: the flake builds `crt`: `nix profile install github:esh2n/code-reading-tool`,
+  or add it as a flake input and use `packages.<system>.crt`.
+- **Release binaries**: each tagged release has `crt` for macOS, Linux and
+  Windows, and a VS Code extension per platform with `crt` inside.
+- **Neovim**: `:CrInstall` downloads the release binary (see below).
+
 ## Configure a model
 
 `crt` has no default endpoint or model. Its configuration is one file shared
