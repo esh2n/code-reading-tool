@@ -150,7 +150,7 @@ impl OpenAiCompatible {
             "model": model,
             "messages": [
                 { "role": "system", "content": prompt::system(&self.output_language) },
-                { "role": "user", "content": prompt::user(request) }
+                { "role": "user", "content": prompt::user(request, &self.output_language) }
             ],
             "response_format": {
                 "type": "json_schema",

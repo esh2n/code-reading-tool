@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crt_app::ExplainRequest;
 use crt_domain::{Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Step, SymbolKind};
 
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
 /// The cache-key form of the prompt: version, output language and, when
 /// extra request fields are set, a short digest of them (they change the
@@ -45,7 +45,9 @@ Produce two things for the one function you are given:
 1. notes: explanations attached to lines of that function.
    - Use only line numbers shown in the numbered source.
    - One note per line that does something worth knowing; skip braces and trivial lines.
-   - text: one short sentence (at most 80 characters) saying what the line does.
+   - text: one short sentence (at most 80 characters) saying what a reader cannot see at a
+     glance: the purpose of the line, how it changes values, or what happens at edge values.
+     Do not restate the syntax ('defines the signature', 'returns the value', 'iterates').
    - detail: a longer explanation for a hover, or an empty string.
    - basis.kind = \"fact\" only when the note merely states that the line calls a function
      listed under STRUCTURAL FACTS for that same line; then basis.call is that function's name.
@@ -69,7 +71,7 @@ assumptions."
     )
 }
 
-pub(crate) fn user(request: &ExplainRequest) -> String {
+pub(crate) fn user(request: &ExplainRequest, output_language: &str) -> String {
     let f = &request.function;
     let kind = match f.kind {
         SymbolKind::Method => "method",
@@ -109,6 +111,9 @@ pub(crate) fn user(request: &ExplainRequest) -> String {
             out.push_str(&format!("--- {}{owner}\n{}\n", c.name, c.numbered_source));
         }
     }
+    out.push_str(&format!(
+        "\nWrite every text field (text, detail, assumptions, title, input, steps, outcome) in {output_language}.\n"
+    ));
     out
 }
 
@@ -305,8 +310,8 @@ mod tests {
     #[test]
     fn identity_folds_the_output_language_into_a_safe_token() {
         let none = serde_json::Map::new();
-        assert_eq!(identity("Japanese", &none), "v1-japanese");
-        assert_eq!(identity("pt-BR", &none), "v1-ptbr");
+        assert_eq!(identity("Japanese", &none), "v2-japanese");
+        assert_eq!(identity("pt-BR", &none), "v2-ptbr");
         let mut off = serde_json::Map::new();
         off.insert(
             "chat_template_kwargs".into(),
@@ -318,7 +323,7 @@ mod tests {
             serde_json::json!({ "enable_thinking": true }),
         );
         let (a, b) = (identity("Japanese", &off), identity("Japanese", &on));
-        assert!(a.starts_with("v1-japanese-x"), "{a}");
+        assert!(a.starts_with("v2-japanese-x"), "{a}");
         assert_ne!(a, b, "different request options are different readings");
         assert_eq!(a, identity("Japanese", &off), "stable");
     }
