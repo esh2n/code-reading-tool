@@ -8,19 +8,27 @@ mod tags;
 
 use std::path::Path;
 
-use crt_app::{StructureError, StructureSource};
-use crt_domain::{LanguageId, Symbol};
+use crt_app::{Structure, StructureError, StructureSource};
+use crt_domain::LanguageId;
 
-pub use grammars::Grammar;
+/// One bundled language, for listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundledLanguage {
+    pub id: LanguageId,
+    pub extensions: &'static [&'static str],
+}
 
 /// The bundled grammars as a structure source.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TreeSitterSource;
 
 impl TreeSitterSource {
-    /// Every bundled language, for listing.
-    pub fn languages() -> impl Iterator<Item = &'static Grammar> {
-        grammars::all().iter()
+    /// Every bundled language.
+    pub fn languages() -> impl Iterator<Item = BundledLanguage> {
+        grammars::all().iter().map(|g| BundledLanguage {
+            id: LanguageId::new(g.id),
+            extensions: g.extensions,
+        })
     }
 }
 
@@ -29,7 +37,7 @@ impl StructureSource for TreeSitterSource {
         grammars::for_path(path).map(|g| LanguageId::new(g.id))
     }
 
-    fn symbols(&self, language: &LanguageId, source: &[u8]) -> Result<Vec<Symbol>, StructureError> {
+    fn structure(&self, language: &LanguageId, source: &[u8]) -> Result<Structure, StructureError> {
         let grammar = grammars::by_id(language.as_str())
             .ok_or_else(|| StructureError::UnknownLanguage(language.clone()))?;
         tags::extract(grammar, source)

@@ -25,7 +25,7 @@ check() {
 }
 
 # crate            allowed direct dependencies
-check crt-domain
+check crt-domain    sha2
 check crt-app      crt-domain
 check crt-wire     crt-domain crt-app serde
 check crt-treesitter crt-domain crt-app tree-sitter tree-sitter-tags \

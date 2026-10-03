@@ -1,34 +1,46 @@
 use std::fmt;
 
-/// Identity of a piece of source text, used as the cache key for a
+use sha2::{Digest, Sha256};
+
+/// Identity of a piece of source text, used as part of the cache key for a
 /// function's reading. Two functions with the same bytes share a reading.
 ///
-/// This is FNV-1a (64-bit): dependency-free and stable across builds. It is
-/// an identity for caching, not a security measure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContentHash(u64);
+/// SHA-256, so a repository cannot craft one function that collides with
+/// another and be served the other's cached explanation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-
+    /// Hashes `bytes`.
     pub fn of(bytes: &[u8]) -> Self {
-        let mut h = Self::OFFSET;
-        for b in bytes {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(Self::PRIME);
-        }
-        Self(h)
+        Self(Sha256::digest(bytes).into())
     }
 
-    pub fn as_u64(self) -> u64 {
-        self.0
+    /// Parses the 64-character hex form produced by `Display`.
+    pub fn parse_hex(hex: &str) -> Option<Self> {
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(Self(out))
     }
 }
 
 impl fmt::Display for ContentHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:016x}", self.0)
+        for b in self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ContentHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ContentHash({self})")
     }
 }
 
@@ -43,10 +55,14 @@ mod tests {
     }
 
     #[test]
-    fn matches_the_fnv1a_reference_vector() {
-        // Known FNV-1a 64 value for the empty input and for "a".
-        assert_eq!(ContentHash::of(b"").as_u64(), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(ContentHash::of(b"a").as_u64(), 0xaf63_dc4c_8601_ec8c);
-        assert_eq!(ContentHash::of(b"a").to_string(), "af63dc4c8601ec8c");
+    fn matches_the_sha256_reference_vector_and_round_trips_hex() {
+        let h = ContentHash::of(b"abc");
+        let hex = h.to_string();
+        assert_eq!(
+            hex,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(ContentHash::parse_hex(&hex), Some(h));
+        assert_eq!(ContentHash::parse_hex("zz"), None);
     }
 }

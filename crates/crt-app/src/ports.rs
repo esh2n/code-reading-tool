@@ -5,16 +5,27 @@ use std::path::Path;
 
 use crt_domain::{LanguageId, Symbol};
 
+/// What a structure source found in one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Structure {
+    /// Every symbol, in file order.
+    pub symbols: Vec<Symbol>,
+    /// True when the parser hit syntax errors; symbols may then be missing
+    /// or have wrong spans, and readers must be told.
+    pub has_syntax_error: bool,
+}
+
 /// Reads the structure (definitions and references) of source text.
 pub trait StructureSource {
     /// The language this source would use for `path`, if it knows one.
     fn language_for(&self, path: &Path) -> Option<LanguageId>;
 
-    /// Every symbol in `source`, in file order.
-    fn symbols(&self, language: &LanguageId, source: &[u8]) -> Result<Vec<Symbol>, StructureError>;
+    /// The structure of `source` in `language`.
+    fn structure(&self, language: &LanguageId, source: &[u8]) -> Result<Structure, StructureError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StructureError {
     UnknownLanguage(LanguageId),
     Parse(String),

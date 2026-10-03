@@ -1,6 +1,9 @@
 //! A function and the structural facts the grammar can state about it.
 //! Every value here is a fact, not a guess: it was read off the syntax tree.
 
+use std::collections::{BTreeMap, HashSet};
+use std::fmt;
+
 use crate::hash::ContentHash;
 use crate::symbol::{Span, Symbol, SymbolKind};
 
@@ -9,7 +12,8 @@ use crate::symbol::{Span, Symbol, SymbolKind};
 pub struct Call {
     pub name: String,
     /// True when a definition with this name exists in the same file.
-    /// A name match, not a resolved call: it can point at the wrong thing.
+    /// A name match, not a resolved call: it can point at the wrong thing,
+    /// and it is true for a recursive call to the function itself.
     pub defined_in_file: bool,
 }
 
@@ -25,36 +29,82 @@ pub struct LineFacts {
 pub struct Function {
     pub name: String,
     pub kind: SymbolKind,
-    /// The innermost type-like definition that contains a method.
+    /// The type a method belongs to: what the source states (receiver,
+    /// `impl` block) or, failing that, the innermost type-like definition
+    /// that contains it.
     pub enclosing: Option<String>,
     pub span: Span,
-    /// Identity of the function's source bytes; the cache key component.
+    /// Identity of the function's source bytes; a cache key component.
     pub hash: ContentHash,
     pub docs: Option<String>,
+    /// In line order.
     pub lines: Vec<LineFacts>,
 }
 
+/// A structure source handed over a symbol that does not fit the source
+/// text. The port is a trust boundary, so this is an error, not a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanOutOfRange {
+    pub symbol: String,
+    pub span: Span,
+    pub source_len: usize,
+}
+
+impl fmt::Display for SpanOutOfRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "symbol {} has byte span {}..{} outside a source of {} bytes",
+            self.symbol, self.span.start_byte, self.span.end_byte, self.source_len
+        )
+    }
+}
+
+impl std::error::Error for SpanOutOfRange {}
+
 impl Function {
-    /// Derives every function in `symbols`, in file order.
-    pub fn derive_all(source: &[u8], symbols: &[Symbol]) -> Vec<Function> {
-        symbols
+    /// Derives every function in `symbols`, in file order. `symbols` may be
+    /// in any order.
+    pub fn derive_all(source: &[u8], symbols: &[Symbol]) -> Result<Vec<Function>, SpanOutOfRange> {
+        let defined: HashSet<&str> = symbols
             .iter()
-            .filter(|s| s.is_function_like())
-            .map(|f| Self::derive(source, symbols, f))
+            .filter(|s| s.is_definition)
+            .map(|s| s.name.as_str())
+            .collect();
+        let mut functions: Vec<&Symbol> = symbols.iter().filter(|s| s.is_function_like()).collect();
+        functions.sort_by_key(|s| (s.span.start_byte, s.span.end_byte));
+        functions
+            .into_iter()
+            .map(|f| Self::derive(source, symbols, &defined, f))
             .collect()
     }
 
-    fn derive(source: &[u8], symbols: &[Symbol], func: &Symbol) -> Function {
+    fn derive(
+        source: &[u8],
+        symbols: &[Symbol],
+        defined: &HashSet<&str>,
+        func: &Symbol,
+    ) -> Result<Function, SpanOutOfRange> {
         let span = func.span;
-        Function {
+        if !span.fits(source) {
+            return Err(SpanOutOfRange {
+                symbol: func.name.clone(),
+                span,
+                source_len: source.len(),
+            });
+        }
+        Ok(Function {
             name: func.name.clone(),
             kind: func.kind.clone(),
-            enclosing: enclosing_type(symbols, func).map(|s| s.name.clone()),
+            enclosing: func
+                .owner
+                .clone()
+                .or_else(|| enclosing_type(symbols, func).map(|s| s.name.clone())),
             span,
             hash: ContentHash::of(&source[span.start_byte..span.end_byte]),
             docs: func.docs.clone(),
-            lines: calls_by_line(symbols, func),
-        }
+            lines: calls_by_line(symbols, defined, func),
+        })
     }
 }
 
@@ -66,28 +116,23 @@ fn enclosing_type<'a>(symbols: &'a [Symbol], func: &Symbol) -> Option<&'a Symbol
         .min_by_key(|s| s.span.len())
 }
 
-fn calls_by_line(symbols: &[Symbol], func: &Symbol) -> Vec<LineFacts> {
-    let mut lines: Vec<LineFacts> = Vec::new();
+/// Calls inside `func`, grouped by the line of the callee name, in line
+/// order regardless of the order of `symbols`.
+fn calls_by_line(symbols: &[Symbol], defined: &HashSet<&str>, func: &Symbol) -> Vec<LineFacts> {
+    let mut by_line: BTreeMap<usize, Vec<Call>> = BTreeMap::new();
     for call in symbols
         .iter()
         .filter(|s| s.is_call() && func.span.contains(&s.span))
     {
-        let fact = Call {
+        by_line.entry(call.name_line).or_default().push(Call {
             name: call.name.clone(),
-            defined_in_file: symbols
-                .iter()
-                .any(|s| s.is_definition && s.name == call.name),
-        };
-        let line = call.span.start_line;
-        match lines.last_mut() {
-            Some(last) if last.line == line => last.calls.push(fact),
-            _ => lines.push(LineFacts {
-                line,
-                calls: vec![fact],
-            }),
-        }
+            defined_in_file: defined.contains(call.name.as_str()),
+        });
     }
-    lines
+    by_line
+        .into_iter()
+        .map(|(line, calls)| LineFacts { line, calls })
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,6 +156,8 @@ mod tests {
                 start_line: lines.0,
                 end_line: lines.1,
             },
+            name_line: lines.0,
+            owner: None,
             docs: None,
         }
     }
@@ -127,7 +174,7 @@ mod tests {
             sym("c", SymbolKind::Call, false, (47, 50), (2, 2)),
             sym("a", SymbolKind::Function, true, (59, 67), (3, 3)),
         ];
-        let functions = Function::derive_all(source, &symbols);
+        let functions = Function::derive_all(source, &symbols).unwrap();
         assert_eq!(functions.len(), 2);
         let m = &functions[0];
         assert_eq!(m.enclosing.as_deref(), Some("Inner"));
@@ -152,13 +199,65 @@ mod tests {
     }
 
     #[test]
+    fn a_stated_owner_wins_over_containment() {
+        let source = b"type T struct{}; func (t T) m() { x() }";
+        let mut m = sym("m", SymbolKind::Method, true, (17, 39), (1, 1));
+        m.owner = Some("T".into());
+        let symbols = vec![sym("T", SymbolKind::Type, true, (0, 15), (1, 1)), m];
+        let f = &Function::derive_all(source, &symbols).unwrap()[0];
+        assert_eq!(f.enclosing.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn modules_do_not_count_as_enclosing_types() {
+        let source = b"mod m { fn f() {} }";
+        let symbols = vec![
+            sym("m", SymbolKind::Module, true, (0, 19), (1, 1)),
+            sym("f", SymbolKind::Function, true, (8, 17), (1, 1)),
+        ];
+        assert!(
+            Function::derive_all(source, &symbols).unwrap()[0]
+                .enclosing
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn calls_are_ordered_by_line_even_when_symbols_are_not() {
+        let source = b"fn f() {\n b();\n a();\n}";
+        let symbols = vec![
+            sym("a", SymbolKind::Call, false, (16, 19), (3, 3)),
+            sym("f", SymbolKind::Function, true, (0, 22), (1, 4)),
+            sym("b", SymbolKind::Call, false, (10, 13), (2, 2)),
+        ];
+        let f = &Function::derive_all(source, &symbols).unwrap()[0];
+        let lines: Vec<_> = f
+            .lines
+            .iter()
+            .map(|l| (l.line, l.calls[0].name.as_str()))
+            .collect();
+        assert_eq!(lines, vec![(2, "b"), (3, "a")]);
+    }
+
+    #[test]
     fn calls_outside_the_function_are_not_counted() {
         let source = b"fn f() {} g();";
         let symbols = vec![
             sym("f", SymbolKind::Function, true, (0, 9), (1, 1)),
             sym("g", SymbolKind::Call, false, (10, 13), (1, 1)),
         ];
-        let f = &Function::derive_all(source, &symbols)[0];
-        assert!(f.lines.is_empty());
+        assert!(
+            Function::derive_all(source, &symbols).unwrap()[0]
+                .lines
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_span_past_the_end_of_the_source_is_an_error_not_a_panic() {
+        let symbols = vec![sym("f", SymbolKind::Function, true, (0, 99), (1, 1))];
+        let err = Function::derive_all(b"fn f() {}", &symbols).unwrap_err();
+        assert_eq!(err.symbol, "f");
+        assert_eq!(err.source_len, 9);
     }
 }

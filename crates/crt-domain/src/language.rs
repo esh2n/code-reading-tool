@@ -6,10 +6,12 @@ use std::fmt;
 pub struct LanguageId(String);
 
 impl LanguageId {
+    /// Wraps an id such as `"go"`.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// The id as text.
     pub fn as_str(&self) -> &str {
         &self.0
     }

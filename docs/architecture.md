@@ -17,12 +17,12 @@
 
 | crate | 層 | 中身 | 依存してよいもの |
 |---|---|---|---|
-| `crt-domain` | ドメイン | 言語 ID、シンボル、関数、構造の事実、内容ハッシュ、注釈と根拠の種類、「根拠の無い注釈は推測に落とす」規則 | 標準ライブラリだけ。serde も tree-sitter も知らない |
+| `crt-domain` | ドメイン | 言語 ID、シンボル、関数、構造の事実、内容ハッシュ、注釈と根拠の種類、「根拠の無い注釈は推測に落とす」規則 | 標準ライブラリと、純粋な計算のライブラリ（`sha2`）だけ。I/O、通信、直列化（serde）、tree-sitter は知らない |
 | `crt-app` | アプリケーション | ユースケース（ファイルを解析する、関数を読む）と、外側に求める能力の trait（ポート） | `crt-domain` |
 | `crt-treesitter` | アダプタ | `StructureSource` ポートの実装。同梱した文法と tags クエリでシンボルを取る | `crt-app`、`crt-domain`、tree-sitter の crate |
 | `crt-llm` | アダプタ | `Explainer` ポートの実装。OpenAI 互換 API を呼ぶ | `crt-app`、`crt-domain`、HTTP と JSON の crate |
 | `crt-store` | アダプタ | `ReadingStore` ポートの実装。利用者のキャッシュ領域にファイルで保存 | `crt-app`、`crt-domain` |
-| `crt-wire` | アダプタ（プレゼンタ） | 外に出す JSON の形（DTO）と、ドメインの型からの変換。LSP の独自メソッド、CLI の出力、HTML の入力が共有する | `crt-domain`、serde |
+| `crt-wire` | アダプタ（プレゼンタ） | 外に出す JSON の形（DTO）と、ユースケースの出力からの変換。LSP の独自メソッド、CLI の出力、HTML の入力が共有する | `crt-app`、`crt-domain`、serde |
 | `crt-cli`、`crt-lsp`、`crt-html` | 組み立て | 実装をポートに差し込み、ユースケースを呼び、`crt-wire` で出す | すべて |
 
 ## 各層の責務
@@ -40,7 +40,11 @@
 
 ## 言語を足すとき
 
-`crt-treesitter` の同梱リストに文法と tags クエリを 1 つ足す。ドメインとアプリケーションは変わらない。
+`crt-treesitter` の同梱リストに文法と tags クエリを 1 つ足す。メソッドの所属する型を本体の外で書く言語（Go のレシーバ、Rust の `impl`）には、`@method` と `@owner` を結ぶ小さなクエリも足す。ドメインとアプリケーションは変わらない。
+
+## 機械的な検査
+
+`scripts/check-layers.sh` が、各 crate の直接依存が許可された集合に収まるかを `cargo tree` で確かめる。
 
 ## 作る順番と層
 

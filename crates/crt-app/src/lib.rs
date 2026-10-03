@@ -4,5 +4,5 @@
 pub mod analyze_file;
 pub mod ports;
 
-pub use analyze_file::{analyze_file, AnalyzeError, FileAnalysis};
-pub use ports::{StructureError, StructureSource};
+pub use analyze_file::{AnalyzeError, FileAnalysis, analyze_file};
+pub use ports::{Structure, StructureError, StructureSource};

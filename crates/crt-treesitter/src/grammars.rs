@@ -1,17 +1,23 @@
 //! The bundled grammars. Adding a language is one entry here: the grammar
-//! crate and the tags query it ships. No other code changes.
+//! crate, the tags query it ships, and optionally an owner query. No other
+//! code changes.
 
 use std::path::Path;
 
 use tree_sitter::Language;
 
-pub struct Grammar {
+pub(crate) struct Grammar {
     /// Stable id, also the domain `LanguageId`.
-    pub id: &'static str,
+    pub(crate) id: &'static str,
     /// File extensions without the dot.
-    pub extensions: &'static [&'static str],
+    pub(crate) extensions: &'static [&'static str],
     language: fn() -> Language,
+    /// Definitions and references, as shipped with the grammar.
     pub(crate) tags_query: &'static str,
+    /// Which type a method belongs to, for languages that state it outside
+    /// the type's body (Go receivers, Rust `impl` blocks). Each match binds
+    /// `@method` to the method node and `@owner` to the type name.
+    pub(crate) owner_query: Option<&'static str>,
 }
 
 impl Grammar {
@@ -20,30 +26,49 @@ impl Grammar {
     }
 }
 
+const GO_OWNER: &str = r"
+(method_declaration
+  receiver: (parameter_list
+    (parameter_declaration
+      type: [(type_identifier) @owner
+             (pointer_type (type_identifier) @owner)]))) @method
+";
+
+const RUST_OWNER: &str = r"
+(impl_item
+  type: [(type_identifier) @owner
+         (generic_type type: (type_identifier) @owner)]
+  body: (declaration_list (function_item) @method))
+";
+
 const GRAMMARS: &[Grammar] = &[
     Grammar {
         id: "rust",
         extensions: &["rs"],
         language: || tree_sitter_rust::LANGUAGE.into(),
         tags_query: tree_sitter_rust::TAGS_QUERY,
+        owner_query: Some(RUST_OWNER),
     },
     Grammar {
         id: "go",
         extensions: &["go"],
         language: || tree_sitter_go::LANGUAGE.into(),
         tags_query: tree_sitter_go::TAGS_QUERY,
+        owner_query: Some(GO_OWNER),
     },
     Grammar {
         id: "python",
         extensions: &["py"],
         language: || tree_sitter_python::LANGUAGE.into(),
         tags_query: tree_sitter_python::TAGS_QUERY,
+        owner_query: None,
     },
     Grammar {
         id: "javascript",
         extensions: &["js", "mjs", "cjs", "jsx"],
         language: || tree_sitter_javascript::LANGUAGE.into(),
         tags_query: tree_sitter_javascript::TAGS_QUERY,
+        owner_query: None,
     },
 ];
 
@@ -76,10 +101,15 @@ mod tests {
     }
 
     #[test]
-    fn every_bundled_tags_query_compiles_against_its_grammar() {
+    fn every_bundled_query_compiles_against_its_grammar() {
         for g in all() {
-            tree_sitter::Query::new(&g.language(), g.tags_query)
+            let lang = g.language();
+            tree_sitter::Query::new(&lang, g.tags_query)
                 .unwrap_or_else(|e| panic!("{}: tags query does not compile: {e}", g.id));
+            if let Some(q) = g.owner_query {
+                tree_sitter::Query::new(&lang, q)
+                    .unwrap_or_else(|e| panic!("{}: owner query does not compile: {e}", g.id));
+            }
         }
     }
 }

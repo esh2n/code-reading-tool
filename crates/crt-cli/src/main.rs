@@ -33,8 +33,8 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Analyze { file, func } => analyze(&file, func.as_deref()),
         Command::Languages => {
-            for g in TreeSitterSource::languages() {
-                println!("{}\t{}", g.id, g.extensions.join(","));
+            for l in TreeSitterSource::languages() {
+                println!("{}\t{}", l.id, l.extensions.join(","));
             }
             Ok(())
         }
@@ -43,7 +43,14 @@ fn main() -> Result<()> {
 
 fn analyze(file: &Path, func: Option<&str>) -> Result<()> {
     let source = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-    let mut analysis = crt_app::analyze_file(&TreeSitterSource, file, &source)?;
+    let mut analysis = crt_app::analyze_file(&TreeSitterSource, file, &source)
+        .with_context(|| format!("analysing {}", file.display()))?;
+    if analysis.has_syntax_error {
+        eprintln!(
+            "warning: {} has syntax errors; facts may be incomplete",
+            file.display()
+        );
+    }
     if let Some(name) = func {
         analysis.functions.retain(|f| f.name == name);
         anyhow::ensure!(
