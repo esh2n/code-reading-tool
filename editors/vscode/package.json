@@ -3,6 +3,7 @@
   "displayName": "Code Reading",
   "description": "Per-line explanations of how code behaves, with scenarios for boundary values and concurrency.",
   "version": "0.1.0",
+  "packageManager": "pnpm@11.15.1",
   "publisher": "esh2n",
   "license": "MIT",
   "repository": {
