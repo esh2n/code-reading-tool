@@ -116,7 +116,7 @@ the release's SHA-256), or put `crt` on your `PATH`.
 | `K` (hover) | the full explanation, its assumptions, and the facts on that line |
 | `:CrRead[!]` | explain the function under the cursor now (`!` asks the model again) |
 | `:CrScenario[!]` | pick a scenario and see its steps beside the code; `<CR>` jumps to a step. The first use for a function asks the model to write them (`!` writes them again) |
-| `:CrToggle` | turn explanations off or on. Off: nothing at line ends and no model calls unless you ask (`:CrRead`, `:CrScenario`). Start off with `enabled = false` in `setup()` |
+| `:CrToggle` | turn explanations off or on. Off: nothing at line ends or in diagnostics, and no model calls unless you ask (`:CrRead`, `:CrScenario`); hover still shows a line's explanation. Start off with `enabled = false` in `setup()` |
 | `:CrConfig` | open the shared configuration file |
 | diagnostics | concurrency scenarios, with the lines that interleave as related locations |
 
@@ -134,7 +134,8 @@ For a statusline, `require("code-reading").status()` returns `crt on`,
 
 Install the `.vsix` for your platform from a release (it contains `crt`).
 The status bar shows `Code Reading: on`, `off` or `writing…`; click it to switch. Off
-means nothing at line ends and no model calls unless you ask. The choice is
+means nothing at line ends or in the Problems panel and no model calls
+unless you ask; hovering still shows a line's explanation. The choice is
 kept in the `codeReading.enabled` setting. Commands: *Code Reading: Explain
 Function at Cursor*, *Show Scenario*, *Open Configuration*, *Turn
 Explanations On or Off*. Settings: `codeReading.enabled`,
