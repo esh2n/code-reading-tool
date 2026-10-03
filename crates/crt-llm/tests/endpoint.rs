@@ -151,7 +151,7 @@ fn request() -> ExplainRequest {
 fn sends_a_strict_schema_and_parses_the_answer() {
     let s = serve(vec![(200, completion(GOOD))]);
     let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
-    assert_eq!(llm.authors()[0].prompt, "v3-japanese");
+    assert_eq!(llm.authors()[0].prompt, "v4-japanese");
     let out = llm.explain(&request(), &mut |_| {}).unwrap();
     assert_eq!(out.author.model, "primary-model");
     assert!(out.warnings.is_empty());
@@ -348,7 +348,7 @@ fn extra_body_is_sent_but_never_overrides_the_core_fields() {
     c.extra_body
         .insert("response_format".into(), json!({ "type": "text" }));
     let llm = OpenAiCompatible::new(c).unwrap();
-    assert!(llm.authors()[0].prompt.starts_with("v3-japanese-x"));
+    assert!(llm.authors()[0].prompt.starts_with("v4-japanese-x"));
     llm.explain(&request(), &mut |_| {}).unwrap();
     let body = &s.seen.lock().unwrap()[0];
     assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crt_app::ExplainRequest;
 use crt_domain::{Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Step, SymbolKind};
 
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 4;
 
 /// The two questions asked about a function: its notes (asked when a file
 /// opens) and its scenarios (asked only on request).
@@ -72,11 +72,19 @@ assumptions."
 const NOTES: &str =
     "Write notes for the one function you are given: explanations attached to its lines.
 - Use only line numbers shown in the numbered source.
-- One note per line that does something worth knowing; skip braces and trivial lines.
+- Note only the lines a careful reader could misread or would want explained: a non-obvious
+  purpose, a value that changes in a way that matters, an edge case, an ordering or
+  concurrency concern, a side effect, an error that is swallowed or turned into another.
+- Skip every line whose behaviour its code states plainly: declarations, simple assignments,
+  calls whose name says what they do, plain returns, error propagation, setting options on
+  a builder, closing braces. A reader who knows the language gains nothing from these.
+- Few, useful notes beat many: as a guide, at most one note for every four or five lines,
+  and none at all for a function whose lines all speak for themselves.
 - Write the notes in line order.
 - text: one short sentence (at most 80 characters) saying what a reader cannot see at a
-  glance: the purpose of the line, how it changes values, or what happens at edge values.
-  Do not restate the syntax ('defines the signature', 'returns the value', 'iterates').
+  glance: why the line is there, what it protects against, or what happens at edge values.
+  Never restate the code ('creates the command', 'returns the value', 'iterates over',
+  'sets stdin to null').
 - detail: a longer explanation for a hover, or an empty string.
 - basis.kind = \"fact\" only when the note merely states that the line calls a function
   listed under STRUCTURAL FACTS for that same line; then basis.call is that function's name.
@@ -359,8 +367,8 @@ mod tests {
     #[test]
     fn identity_folds_the_output_language_into_a_safe_token() {
         let none = serde_json::Map::new();
-        assert_eq!(identity("Japanese", &none), "v3-japanese");
-        assert_eq!(identity("pt-BR", &none), "v3-ptbr");
+        assert_eq!(identity("Japanese", &none), "v4-japanese");
+        assert_eq!(identity("pt-BR", &none), "v4-ptbr");
         let mut off = serde_json::Map::new();
         off.insert(
             "chat_template_kwargs".into(),
@@ -372,7 +380,7 @@ mod tests {
             serde_json::json!({ "enable_thinking": true }),
         );
         let (a, b) = (identity("Japanese", &off), identity("Japanese", &on));
-        assert!(a.starts_with("v3-japanese-x"), "{a}");
+        assert!(a.starts_with("v4-japanese-x"), "{a}");
         assert_ne!(a, b, "different request options are different readings");
         assert_eq!(a, identity("Japanese", &off), "stable");
     }
