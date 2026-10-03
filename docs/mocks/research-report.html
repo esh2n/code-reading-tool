@@ -341,7 +341,7 @@ blockquote { margin: 0 0 12px; padding: 8px 14px; border-left: 3px solid var(--a
     <li>Error Lens（行末にエラーを出す拡張、841★）は 2026-09-26 の 3.29.0 で「1 ファイルに 1,000 件超のときは、見えている行だけに描く」に直した。設定の説明の原文: 「VSCode creates a separate set of CSS rules for every distinct inline message, so a file with thousands of problems can freeze the editor for a long time.」<span class="m d">直</span></li>
     <li>GitLens は最初から<b>カーソル行だけ</b>に行末注釈を出す <span class="m d">直</span>。</li>
   </ul>
-  <div class="key"><p><b>結論:</b> VS Code では、画面に見えている行 ± 余白にだけ付け、スクロールに合わせて付け替える。長い全文は hover（マウスを乗せたときの説明窓）に回す。inlay hint は VS Code の既定で 1 行 43 文字で切られるので、解説には使えない（2026-09-30 の記録 <span class="m d">直</span>）。</p></div>
+  <div class="key"><p><b>結論:</b> VS Code では、内部的に、画面に見えている行 ± 余白にだけ付け、スクロールに合わせて付け替える。利用者からは全行に付いているように見え、Neovim と同じ画面になる。長い全文は hover（マウスを乗せたときの説明窓）に回す。これは両エディタ共通。inlay hint は VS Code の既定で 1 行 43 文字で切られるので、解説には使えない（2026-09-30 の記録 <span class="m d">直</span>）。</p></div>
 
   <h3>5.3 VS Code の中で Rust などのコアを動かす方法</h3>
   <div class="tw"><table>
@@ -448,8 +448,8 @@ blockquote { margin: 0 0 12px; padding: 8px 14px; border-left: 3px solid var(--a
       <tr><td>接続の方式</td><td>LSP の枠 + 独自メソッド（Copilot 型）</td><td>両エディタにクライアントが組み込み。Cody の手書きの実例</td><td>独自方式は起動・再起動・進捗・キャンセル・診断・hover を自分で書く</td></tr>
       <tr><td>多言語</td><td>tree-sitter の文法をバックエンドに同梱</td><td>3.5。エディタの LSP は言語で揃わない。Neovim のパーサは利用者次第</td><td>言語と環境で結果が変わる</td></tr>
       <tr><td>バックエンドの言語</td><td>Rust</td><td>6.4</td><td>Go は tree-sitter が止まっている。TS は配布が重い</td></tr>
-      <tr><td>Neovim 側</td><td>Lua だけ。全行に一度に付ける</td><td>4.1 の実測。4.3 の前例</td><td>FFI はクラッシュの代償に見合う処理が無い。wasm は不可</td></tr>
-      <tr><td>VS Code 側</td><td>TypeScript。見えている行だけに付け、全文は hover</td><td>5.2</td><td>全行に付けると固まる</td></tr>
+      <tr><td>Neovim 側</td><td>Lua だけ。画面の仕様は VS Code と同じ（全行の行末に短い 1 文、全文は hover）。内部では全行ぶんを一度に付ける</td><td>4.1 の実測。4.3 の前例</td><td>FFI はクラッシュの代償に見合う処理が無い。wasm は不可</td></tr>
+      <tr><td>VS Code 側</td><td>TypeScript。画面の仕様は Neovim と同じ。内部では見えている行 ± 余白にだけ付け、スクロールで付け替える</td><td>5.2</td><td>全行に一度に付けると固まる</td></tr>
       <tr><td>ブラウザ版 VS Code</td><td>対応しない</td><td>5.3</td><td>対応するなら wasm（15 倍遅い）</td></tr>
       <tr><td>配布</td><td>Neovim は Release のバイナリを取得して SHA-256 検証、VS Code は OS 別 VSIX に同梱</td><td>2.4、Ruff の例</td><td>—</td></tr>
       <tr><td>開いたら出る</td><td>構造の事実と保存済みの解説を即時に、新しい解説は見えている関数から順に</td><td>7</td><td>初回を待つしかない</td></tr>
