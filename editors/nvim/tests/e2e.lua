@@ -122,6 +122,30 @@ cr.toggle()
 check(#vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, {}) > 0, "toggle did not show")
 check(vim.diagnostic.is_enabled({ ns_id = vim.lsp.diagnostic.get_namespace(client.id, false) }), "diagnostics not back")
 
+-- Editing Inc keeps its earlier notes, marked (old); saving reads it again.
+local function line_text(n)
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, { details = true })) do
+    if m[2] + 1 == n then
+      local t = {}
+      for _, chunk in ipairs(m[4].virt_text) do
+        table.insert(t, chunk[1])
+      end
+      return table.concat(t)
+    end
+  end
+  return ""
+end
+vim.api.nvim_buf_set_lines(buf, 5, 6, false, { "\tc.n = add(c.n, 2)" })
+check(vim.wait(5000, function()
+  return line_text(6):find("(old) calls add", 1, true) ~= nil
+end, 50), "no old note after the edit: " .. line_text(6))
+vim.api.nvim_buf_call(buf, function()
+  vim.cmd("silent write")
+end)
+check(vim.wait(10000, function()
+  return line_text(6):find("● calls add", 1, true) ~= nil
+end, 50), "not read again after saving: " .. line_text(6))
+
 -- :CrConfig opens the configuration file the server reads.
 vim.api.nvim_set_current_buf(buf)
 cr.open_config()

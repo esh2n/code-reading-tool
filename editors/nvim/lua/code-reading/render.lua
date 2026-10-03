@@ -15,6 +15,7 @@ function M.define_highlights()
   set("CodeReadingGuess", "Comment")
   set("CodeReadingCall", "NonText")
   set("CodeReadingPending", "DiagnosticHint")
+  set("CodeReadingStale", "NonText")
   set("CodeReadingStep", "Visual")
 end
 
@@ -23,15 +24,22 @@ local HL = { fact = "CodeReadingFact", inference = "CodeReadingGuess" }
 
 --- The virtual text chunks for every annotated line, keyed by 1-based line.
 --- `partial` holds notes still arriving, by function hash; they stand in
---- for the reading until it is finished. Exposed for tests.
-function M.chunks(params, pending, partial)
+--- for the reading until it is finished. `stale` holds the earlier reading
+--- of functions edited since, shown as old until they are read again.
+--- Exposed for tests.
+function M.chunks(params, pending, partial, stale)
   local out = {}
   partial = partial or {}
+  stale = stale or {}
   for i, f in ipairs(params.analysis.functions) do
     local reading = params.readings[i]
     local notes = partial[f.hash]
+    local old = false
     if not notes and state.present(reading) then
       notes = reading.notes
+    end
+    if not notes and stale[f.hash] then
+      notes, old = stale[f.hash].notes, true
     end
     local notes_by_line = {}
     if notes then
@@ -54,7 +62,11 @@ function M.chunks(params, pending, partial)
       if notes then
         local n = notes[1]
         local kind = n.basis.kind
-        table.insert(chunks, { "  " .. MARK[kind] .. n.text, HL[kind] })
+        if old then
+          table.insert(chunks, { "  (old) " .. n.text, "CodeReadingStale" })
+        else
+          table.insert(chunks, { "  " .. MARK[kind] .. n.text, HL[kind] })
+        end
         if #notes > 1 then
           table.insert(chunks, { (" +%d"):format(#notes - 1), "CodeReadingGuess" })
         end
@@ -79,7 +91,7 @@ function M.draw(bufnr)
     return
   end
   local count = vim.api.nvim_buf_line_count(bufnr)
-  for line, chunks in pairs(M.chunks(s.params, s.pending, s.partial)) do
+  for line, chunks in pairs(M.chunks(s.params, s.pending, s.partial, s.stale)) do
     if line <= count then
       vim.api.nvim_buf_set_extmark(bufnr, M.ns, line - 1, 0, {
         virt_text = chunks,

@@ -20,7 +20,12 @@ function M.set(bufnr, params, client_id)
   for _, p in ipairs(params.partial or {}) do
     partial[p.functionHash] = p.notes
   end
-  by_buf[bufnr] = { params = params, pending = pending, partial = partial, client_id = client_id }
+  -- The earlier reading of each function edited since, by function hash.
+  local stale = {}
+  for _, s in ipairs(params.stale or {}) do
+    stale[s.functionHash] = s.reading
+  end
+  by_buf[bufnr] = { params = params, pending = pending, partial = partial, stale = stale, client_id = client_id }
 end
 
 function M.get(bufnr)

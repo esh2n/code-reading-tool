@@ -113,6 +113,17 @@ export async function run(): Promise<void> {
     "the configuration file",
   );
 
+  // Editing Inc keeps its earlier notes, marked old; saving reads it again.
+  await vscode.window.showTextDocument(doc);
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(doc.uri, doc.lineAt(5).range, "\tc.n = add(c.n, 2)");
+  await vscode.workspace.applyEdit(edit);
+  const at6 = () => api.annotationsFor(uri).find((a) => a.line === 6);
+  await until(() => (at6()?.style === "stale" ? true : undefined), 10000, "the old note after the edit");
+  assert.equal(at6()?.text, "(old) calls add");
+  await doc.save();
+  await until(() => (at6()?.style === "fact" ? true : undefined), 15000, "the note read again after saving");
+
   // An explicit read is served from the cache.
   await vscode.window.showTextDocument(doc);
   await vscode.commands.executeCommand("codeReading.read");

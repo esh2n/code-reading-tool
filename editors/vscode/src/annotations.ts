@@ -3,7 +3,7 @@
 
 import type { FileReadingsParams, FunctionDto, NoteDto } from "./protocol";
 
-export type Style = "fact" | "guess" | "call" | "pending";
+export type Style = "fact" | "guess" | "call" | "pending" | "stale";
 
 export interface Annotation {
   /** 1-based line. */
@@ -19,26 +19,33 @@ export function annotations(params: FileReadingsParams): Annotation[] {
   const pending = new Set(params.pending);
   // Notes still arriving stand in for the reading until it is finished.
   const partial = new Map((params.partial ?? []).map((p) => [p.functionHash, p.notes]));
+  // Functions edited since they were read keep their earlier notes, marked old.
+  const stale = new Map((params.stale ?? []).map((s) => [s.functionHash, s.reading.notes]));
   const out: Annotation[] = [];
   params.analysis.functions.forEach((fn, i) => {
-    const notes = partial.get(fn.hash) ?? params.readings[i]?.notes ?? [];
-    out.push(...forFunction(fn, notes, pending.has(fn.hash)));
+    const current = partial.get(fn.hash) ?? params.readings[i]?.notes;
+    const old = current ? undefined : stale.get(fn.hash);
+    out.push(...forFunction(fn, current ?? old ?? [], pending.has(fn.hash), old !== undefined));
   });
   return out.sort((a, b) => a.line - b.line);
 }
 
-function forFunction(fn: FunctionDto, all: NoteDto[], pending: boolean): Annotation[] {
+function forFunction(fn: FunctionDto, all: NoteDto[], pending: boolean, old: boolean): Annotation[] {
   const out: Annotation[] = [];
   for (let line = fn.start_line; line <= fn.end_line; line++) {
     const notes = all.filter((n) => n.line === line);
     const first = notes[0];
     if (first) {
       const more = notes.length > 1 ? ` +${notes.length - 1}` : "";
-      out.push({
-        line,
-        text: MARK[first.basis.kind] + first.text + more,
-        style: first.basis.kind === "fact" ? "fact" : "guess",
-      });
+      out.push(
+        old
+          ? { line, text: "(old) " + first.text + more, style: "stale" }
+          : {
+              line,
+              text: MARK[first.basis.kind] + first.text + more,
+              style: first.basis.kind === "fact" ? "fact" : "guess",
+            },
+      );
     } else {
       const calls = fn.lines.find((l) => l.line === line)?.calls ?? [];
       if (calls.length > 0) {

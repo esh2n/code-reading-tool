@@ -90,6 +90,31 @@ test("notes still arriving stand in for the reading", () => {
   );
 });
 
+test("an edited function shows its earlier notes, marked old", () => {
+  const a = annotations({
+    ...params,
+    pending: [],
+    stale: [
+      {
+        functionHash: "h2",
+        reading: {
+          function_hash: "old",
+          model: "m",
+          prompt: "p",
+          notes: [{ line: 10, text: "adds", detail: null, assumptions: [], basis: { kind: "fact", call: "x" } }],
+          scenarios: null,
+          demoted: 0,
+          dropped: 0,
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    a.filter((x) => x.line === 10).map((x) => [x.style, x.text]),
+    [["stale", "(old) adds"]],
+  );
+});
+
 test("only lines near the visible range are rendered", () => {
   const a = annotations(params);
   assert.deepEqual(

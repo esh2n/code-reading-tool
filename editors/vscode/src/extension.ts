@@ -105,6 +105,7 @@ function makeStyles(): void {
   styles.guess = make("editorCodeLens.foreground", true);
   styles.call = make("editorLineNumber.foreground", false);
   styles.pending = make("editorInfo.foreground", true);
+  styles.stale = make("disabledForeground", true);
 }
 
 /** The server binary: setting, then bundled, then `crt` on PATH. */
@@ -120,7 +121,7 @@ function serverPath(context: vscode.ExtensionContext): string {
 
 function render(editor: vscode.TextEditor): void {
   const params = latest.get(editor.document.uri.toString());
-  const by: Record<Style, vscode.DecorationOptions[]> = { fact: [], guess: [], call: [], pending: [] };
+  const by: Record<Style, vscode.DecorationOptions[]> = { fact: [], guess: [], call: [], pending: [], stale: [] };
   if (params && enabled && params.version >= 0) {
     const ranges = editor.visibleRanges.map((r) => ({ start: r.start.line + 1, end: r.end.line + 1 }));
     const lines = editor.document.lineCount;
@@ -295,6 +296,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
     initializationOptions: {
       autoRead: settings.get<boolean>("autoRead", true),
       maxParallel: settings.get<number>("maxParallel", 2),
+      readOn: settings.get<string>("readOn", "save"),
     },
     middleware: {
       // The server's diagnostics (concurrency scenarios) are kept, and shown

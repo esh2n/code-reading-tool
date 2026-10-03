@@ -26,6 +26,10 @@ local defaults = {
   auto_read = true,
   --- How many functions may be read at once.
   max_parallel = 2,
+  --- When an edited function is explained again without being asked:
+  --- "save" (when the file is saved) or "idle" (2 s after typing stops).
+  --- Until then it shows its earlier explanation, marked (old).
+  read_on = "save",
   --- Milliseconds to wait after scrolling before reporting the view.
   debounce_ms = 150,
 }
@@ -207,7 +211,11 @@ function M.setup(opts)
     filetypes = M.config.filetypes,
     root_markers = { ".git" },
     workspace_required = false,
-    init_options = { autoRead = M.config.auto_read, maxParallel = M.config.max_parallel },
+    init_options = {
+      autoRead = M.config.auto_read,
+      maxParallel = M.config.max_parallel,
+      readOn = M.config.read_on,
+    },
     handlers = { ["codeReading/fileReadings"] = on_file_readings },
   })
   vim.lsp.enable("crt")

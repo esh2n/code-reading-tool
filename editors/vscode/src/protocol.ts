@@ -72,6 +72,13 @@ export interface FileReadingsParams {
   pending: string[];
   /** Notes received so far for readings still being written. */
   partial?: PartialNotesDto[];
+  /** The earlier reading of functions edited since, shown as old. */
+  stale?: StaleReadingDto[];
+}
+
+export interface StaleReadingDto {
+  functionHash: string;
+  reading: ReadingDto;
 }
 
 export interface PartialNotesDto {
