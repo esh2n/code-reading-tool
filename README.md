@@ -33,22 +33,40 @@ query misses functions or calls, a query file in
 
 ## Configure a model
 
-`crt` has no default endpoint or model. Create `config.toml` in the platform
-configuration directory — `~/.config/crt/` on Linux,
-`~/Library/Application Support/crt/` on macOS — or pass `--config`. When the
-file is missing, `crt read` prints the exact path it looked at.
+`crt` has no default endpoint or model. Its configuration is one file shared
+by the CLI and every editor: `config.toml` in the platform configuration
+directory (`~/.config/crt/` on Linux, `~/Library/Application Support/crt/` on
+macOS), or the file given with `--config`. `crt config`, `:CrConfig` in Neovim
+and *Code Reading: Open Configuration* in VS Code print or open it, writing a
+commented example first when there is none. Editors pick up changes on the
+next read, without a restart. Editor-specific choices (whether explanations
+are on, how many functions to read at once) are editor settings instead.
 
 ```toml
 [llm]
 base_url = "https://your-endpoint.example/v1"   # any OpenAI-compatible endpoint
 model = "your-model"
-api_key_env = "YOUR_API_KEY_VARIABLE"           # the variable's name; omit for keyless endpoints
+api_key_command = ["security", "find-generic-password", "-s", "your-service", "-w"]
 output_language = "English"                     # e.g. "Japanese"
 
 [[llm.fallback]]                                # optional, tried when the above is down
 base_url = "https://another.example/v1"
 model = "another-model"
 ```
+
+The API key never goes in the file. Choose one source, or none for an
+endpoint without keys:
+
+| Setting | Where the key comes from |
+|---|---|
+| `api_key_env = "NAME"` | an environment variable. Only programs started from a shell that sets it see it; an editor started from the Dock or a launcher does not. |
+| `api_key_command = ["program", "arg", ...]` | the first line a command prints. It runs once per server, the first time a model is called, and may take up to 60 s (time to answer a password manager's prompt). If it fails, it is not run again until the configuration changes; what it printed never appears in messages or logs. |
+
+Any tool that prints a secret works with `api_key_command`, for example
+`["security", "find-generic-password", "-s", "NAME", "-w"]` (macOS Keychain),
+`["secret-tool", "lookup", "service", "NAME"]` (Linux Secret Service),
+`["op", "read", "op://Vault/Item/credential"]` (1Password),
+`["bw", "get", "password", "NAME"]` (Bitwarden) or `["pass", "show", "NAME"]`.
 
 Endpoint-specific request options go in `[llm.extra_body]`; they are merged
 into every request (never over `model`, `messages` or `response_format`) and
@@ -98,7 +116,8 @@ the release's SHA-256), or put `crt` on your `PATH`.
 | `K` (hover) | the full explanation, its assumptions, and the facts on that line |
 | `:CrRead[!]` | explain the function under the cursor now (`!` asks the model again) |
 | `:CrScenario[!]` | pick a scenario and see its steps beside the code; `<CR>` jumps to a step. The first use for a function asks the model to write them (`!` writes them again) |
-| `:CrToggle` | hide or show the annotations |
+| `:CrToggle` | turn explanations off or on. Off: nothing at line ends and no model calls unless you ask (`:CrRead`, `:CrScenario`). Start off with `enabled = false` in `setup()` |
+| `:CrConfig` | open the shared configuration file |
 | diagnostics | concurrency scenarios, with the lines that interleave as related locations |
 
 Notes appear one by one while the model writes them. Scenarios are written
@@ -107,12 +126,20 @@ only when asked for, so opening a file costs one short request per function.
 A local model that serves one request at a time gains nothing from parallel
 reads: pass `max_parallel = 1` to `setup()`.
 
+For a statusline, `require("code-reading").status()` returns `crt on`,
+`crt off` or `crt …` (writing). With lualine, clicking it can switch:
+`{ require("code-reading").status, on_click = function() require("code-reading").toggle() end }`.
+
 ### VS Code
 
 Install the `.vsix` for your platform from a release (it contains `crt`).
-Commands: *Code Reading: Explain Function at Cursor*, *Show Scenario*,
-*Toggle Annotations*. Settings: `codeReading.configPath`, `codeReading.cacheDir`,
-`codeReading.autoRead`, `codeReading.maxParallel`, `codeReading.serverPath`.
+The status bar shows whether explanations are on; click it to switch. Off
+means nothing at line ends and no model calls unless you ask. The choice is
+kept in the `codeReading.enabled` setting. Commands: *Code Reading: Explain
+Function at Cursor*, *Show Scenario*, *Open Configuration*, *Turn
+Explanations On or Off*. Settings: `codeReading.enabled`,
+`codeReading.configPath`, `codeReading.cacheDir`, `codeReading.autoRead`,
+`codeReading.maxParallel`, `codeReading.serverPath`.
 
 ## Develop
 
