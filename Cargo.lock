@@ -319,6 +319,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "crt-app",
+ "crt-domain",
  "crt-html",
  "crt-llm",
  "crt-lsp",
