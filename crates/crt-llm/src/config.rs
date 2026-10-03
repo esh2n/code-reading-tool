@@ -12,6 +12,10 @@ pub struct EndpointConfig {
     /// Name of the environment variable holding the API key. The key
     /// itself never appears in configuration. Omit for keyless endpoints.
     pub api_key_env: Option<String>,
+    /// A command that prints the API key on its first line (a password
+    /// manager, the OS keychain). Run once, on first use. Use either this
+    /// or `api_key_env`.
+    pub api_key_command: Option<Vec<String>>,
 }
 
 /// The `[llm]` section of the configuration file.
@@ -21,6 +25,7 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: String,
     pub api_key_env: Option<String>,
+    pub api_key_command: Option<Vec<String>>,
     /// Tried in order when the endpoint above cannot be reached or fails
     /// with a server error.
     #[serde(default)]
@@ -54,6 +59,7 @@ impl LlmConfig {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             api_key_env: self.api_key_env.clone(),
+            api_key_command: self.api_key_command.clone(),
         };
         std::iter::once(primary)
             .chain(self.fallback.iter().cloned())

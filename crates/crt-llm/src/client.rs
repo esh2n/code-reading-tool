@@ -13,6 +13,7 @@ use crt_app::{ExplainError, ExplainRequest, Explained, ExplainedScenarios, Expla
 use crt_domain::{Author, Note};
 
 use crate::config::{EndpointConfig, LlmConfig};
+use crate::key::KeySource;
 use crate::prompt::{self, Task};
 use crate::stream::{ObjectScanner, read_events};
 
@@ -24,6 +25,8 @@ pub struct OpenAiCompatible {
     output_language: String,
     extra_body: serde_json::Map<String, Value>,
     endpoints: Vec<EndpointConfig>,
+    /// One per endpoint, same order.
+    keys: Vec<KeySource>,
     http: Client,
 }
 
@@ -32,8 +35,10 @@ impl OpenAiCompatible {
     /// would receive an API key must use https, except on this machine.
     pub fn new(config: LlmConfig) -> Result<Self, ExplainError> {
         let endpoints = config.endpoints();
+        let mut keys = Vec::with_capacity(endpoints.len());
         for e in &endpoints {
             check_endpoint(e)?;
+            keys.push(KeySource::for_endpoint(e)?);
         }
         let http = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
@@ -43,6 +48,7 @@ impl OpenAiCompatible {
             output_language: config.output_language,
             extra_body: config.extra_body,
             endpoints,
+            keys,
             http,
         })
     }
@@ -65,7 +71,7 @@ fn check_endpoint(e: &EndpointConfig) -> Result<(), ExplainError> {
     );
     match url.scheme() {
         "https" => Ok(()),
-        "http" if local || e.api_key_env.is_none() => Ok(()),
+        "http" if local || (e.api_key_env.is_none() && e.api_key_command.is_none()) => Ok(()),
         "http" => Err(ExplainError::Config(format!(
             "{} sends an API key over plain http; use https (http is allowed only for localhost)",
             e.base_url
@@ -169,7 +175,7 @@ impl OpenAiCompatible {
                         shown = true;
                     }
                 };
-                match self.attempt(endpoint, &body, &mut on_content, parse) {
+                match self.attempt(endpoint, &self.keys[i], &body, &mut on_content, parse) {
                     Attempt::Ok(value) => {
                         if attempt > 0 {
                             warnings.push(format!(
@@ -239,6 +245,7 @@ impl OpenAiCompatible {
     fn attempt<T>(
         &self,
         endpoint: &EndpointConfig,
+        key: &KeySource,
         body: &Value,
         on_content: &mut dyn FnMut(&str),
         parse: fn(&str) -> Result<T, String>,
@@ -248,16 +255,10 @@ impl OpenAiCompatible {
             endpoint.base_url.trim_end_matches('/')
         );
         let mut req = self.http.post(&url).json(body);
-        if let Some(var) = &endpoint.api_key_env {
-            match std::env::var(var) {
-                Ok(key) if !key.is_empty() => req = req.bearer_auth(key),
-                _ => {
-                    return Attempt::Down(format!(
-                        "environment variable {var} (api_key_env for {}) is not set",
-                        endpoint.model
-                    ));
-                }
-            }
+        match key.key() {
+            Ok(Some(k)) => req = req.bearer_auth(k),
+            Ok(None) => {}
+            Err(why) => return Attempt::Down(format!("{why} for {}", endpoint.model)),
         }
         let response = match req.send() {
             Ok(r) => r,

@@ -1,5 +1,6 @@
 //! Drives the adapter against a scripted local HTTP server.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,8 @@ use serde_json::{Value, json};
 struct Script {
     url: String,
     seen: Arc<Mutex<Vec<Value>>>,
+    /// The Authorization header of each request, if any.
+    auth: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 fn serve(responses: Vec<(u16, String)>) -> Script {
@@ -24,11 +27,14 @@ fn serve(responses: Vec<(u16, String)>) -> Script {
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let seen_in = Arc::clone(&seen);
+    let auth = Arc::new(Mutex::new(Vec::new()));
+    let auth_in = Arc::clone(&auth);
     thread::spawn(move || {
         for (status, body) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut len = 0usize;
+            let mut authorization = None;
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -38,7 +44,11 @@ fn serve(responses: Vec<(u16, String)>) -> Script {
                 if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
                     len = v.trim().parse().unwrap();
                 }
+                if line.to_ascii_lowercase().starts_with("authorization:") {
+                    authorization = Some(line["authorization:".len()..].trim().to_string());
+                }
             }
+            auth_in.lock().unwrap().push(authorization);
             let mut buf = vec![0; len];
             reader.read_exact(&mut buf).unwrap();
             seen_in
@@ -57,7 +67,7 @@ fn serve(responses: Vec<(u16, String)>) -> Script {
             stream.write_all(reply.as_bytes()).unwrap();
         }
     });
-    Script { url, seen }
+    Script { url, seen, auth }
 }
 
 fn completion(content: &str) -> String {
@@ -91,12 +101,14 @@ fn config(url: &str, fallback: Option<&str>) -> LlmConfig {
         base_url: url.into(),
         model: "primary-model".into(),
         api_key_env: None,
+        api_key_command: None,
         fallback: fallback
             .map(|u| {
                 vec![EndpointConfig {
                     base_url: u.into(),
                     model: "fallback-model".into(),
                     api_key_env: None,
+                    api_key_command: None,
                 }]
             })
             .unwrap_or_default(),
@@ -398,5 +410,62 @@ fn scenarios_are_a_separate_request_with_their_own_schema() {
     assert_eq!(
         body["response_format"]["json_schema"]["schema"]["required"],
         json!(["scenarios"])
+    );
+}
+
+fn sh(script: &str) -> Vec<String> {
+    vec!["sh".into(), "-c".into(), script.into()]
+}
+
+#[test]
+fn a_key_command_runs_once_and_its_key_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("count");
+    let s = serve(vec![(200, completion(GOOD)), (200, completion(GOOD))]);
+    let mut c = config(&s.url, None);
+    c.api_key_command = Some(sh(&format!(
+        "echo x >> '{}'; printf 'from-command\\n'",
+        count.display()
+    )));
+    let llm = OpenAiCompatible::new(c).unwrap();
+    llm.explain(&request(), &mut |_| {}).unwrap();
+    llm.explain(&request(), &mut |_| {}).unwrap();
+    let auth = s.auth.lock().unwrap().clone();
+    assert_eq!(auth, vec![Some("Bearer from-command".to_string()); 2]);
+    assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn a_failing_key_command_moves_to_the_fallback_without_showing_its_output() {
+    let fallback = serve(vec![(200, completion(GOOD))]);
+    let mut c = config("http://127.0.0.1:9/v1", Some(&fallback.url));
+    c.api_key_command = Some(sh("echo SECRET; exit 1"));
+    let out = OpenAiCompatible::new(c)
+        .unwrap()
+        .explain(&request(), &mut |_| {})
+        .unwrap();
+    assert_eq!(out.author.model, "fallback-model");
+    let warning = out.warnings.join("\n");
+    assert!(warning.contains("api_key_command (sh) failed"), "{warning}");
+    assert!(!warning.contains("SECRET"), "{warning}");
+}
+
+#[test]
+fn a_key_source_is_one_of_env_or_command() {
+    let mut both = config("http://localhost:4000/v1", None);
+    both.api_key_env = Some("A".into());
+    both.api_key_command = Some(sh("printf k"));
+    let err = OpenAiCompatible::new(both).err().unwrap();
+    assert!(err.to_string().contains("not both"), "{err}");
+
+    let mut empty = config("http://localhost:4000/v1", None);
+    empty.api_key_command = Some(vec![]);
+    assert!(OpenAiCompatible::new(empty).is_err());
+
+    let mut remote = config("http://llm.example/v1", None);
+    remote.api_key_command = Some(sh("printf k"));
+    assert!(
+        OpenAiCompatible::new(remote).is_err(),
+        "a key from a command is not sent over plain http either"
     );
 }

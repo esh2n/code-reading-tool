@@ -13,6 +13,7 @@
 
 mod client;
 mod config;
+mod key;
 mod prompt;
 mod stream;
 
