@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crt_domain::{LanguageId, Symbol};
+use crt_domain::{Author, ContentHash, Draft, Function, LanguageId, Reading, Symbol};
 
 /// What a structure source found in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,3 +41,102 @@ impl fmt::Display for StructureError {
 }
 
 impl std::error::Error for StructureError {}
+
+/// A function whose body calls the function being read, by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    pub name: String,
+    pub enclosing: Option<String>,
+    pub start_line: usize,
+    /// The caller's source with line numbers.
+    pub numbered_source: String,
+}
+
+/// Everything the explainer is given about one function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainRequest {
+    pub language: LanguageId,
+    pub function: Function,
+    /// The function's source with line numbers, as the notes must refer to.
+    pub numbered_source: String,
+    /// Callers in the same file, found by name; may include wrong matches.
+    pub callers: Vec<Caller>,
+}
+
+/// What the explainer wrote, and who actually wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Explained {
+    pub draft: Draft,
+    /// The author that produced this draft. Differs from
+    /// [`Explainer::author`] when a fallback was used.
+    pub author: Author,
+    /// Things the reader should know (a fallback was used, a retry was
+    /// needed).
+    pub warnings: Vec<String>,
+}
+
+/// Writes per-line notes and behaviour scenarios for a function.
+pub trait Explainer {
+    /// The author a reading would have if the primary endpoint answers.
+    /// Used to look up the cache before calling anything.
+    fn author(&self) -> Author;
+
+    fn explain(&self, request: &ExplainRequest) -> Result<Explained, ExplainError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExplainError {
+    /// No endpoint (primary or fallback) could be reached.
+    Unreachable(String),
+    /// The endpoint does not accept a JSON Schema for structured output.
+    StructuredOutputUnsupported(String),
+    /// The endpoint kept returning output that does not fit the schema.
+    Malformed(String),
+    /// The endpoint refused the request (auth, quota, bad request).
+    Rejected(String),
+}
+
+impl fmt::Display for ExplainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreachable(m) => write!(f, "no LLM endpoint could be reached: {m}"),
+            Self::StructuredOutputUnsupported(m) => {
+                write!(
+                    f,
+                    "the LLM endpoint does not support structured output: {m}"
+                )
+            }
+            Self::Malformed(m) => write!(f, "the LLM kept answering in the wrong shape: {m}"),
+            Self::Rejected(m) => write!(f, "the LLM endpoint refused the request: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for ExplainError {}
+
+/// Identifies one stored reading.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReadingKey {
+    pub language: LanguageId,
+    pub function_hash: ContentHash,
+    pub author: Author,
+}
+
+/// Keeps readings between runs. Best-effort: a failing store never fails
+/// a read.
+pub trait ReadingStore {
+    fn get(&self, key: &ReadingKey) -> Result<Option<Reading>, StoreError>;
+    fn put(&self, key: &ReadingKey, reading: &Reading) -> Result<(), StoreError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreError(pub String);
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "reading store: {}", self.0)
+    }
+}
+
+impl std::error::Error for StoreError {}

@@ -12,10 +12,15 @@ path = "src/main.rs"
 
 [dependencies]
 crt-app = { path = "../crt-app" }
+crt-llm = { path = "../crt-llm" }
+crt-store = { path = "../crt-store" }
 crt-treesitter = { path = "../crt-treesitter" }
 crt-wire = { path = "../crt-wire" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+directories = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 serde_json = "1"
 
 [dev-dependencies]

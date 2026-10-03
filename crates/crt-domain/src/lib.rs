@@ -8,9 +8,13 @@
 pub mod function;
 pub mod hash;
 pub mod language;
+pub mod reading;
 pub mod symbol;
 
 pub use function::{Call, Function, LineFacts, SpanOutOfRange};
 pub use hash::ContentHash;
 pub use language::LanguageId;
+pub use reading::{
+    Author, Basis, CheckReport, Draft, FactRef, Note, Reading, Scenario, ScenarioKind, Step,
+};
 pub use symbol::{Span, Symbol, SymbolKind};

@@ -4,6 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 
+mod reading;
+
+pub use reading::{
+    BasisDto, FunctionReadingDto, InvalidReading, NoteDto, ReadingDto, ScenarioDto,
+    ScenarioKindDto, StepDto,
+};
+
 use crt_app::FileAnalysis;
 use crt_domain::{Call, Function, LineFacts, SymbolKind};
 

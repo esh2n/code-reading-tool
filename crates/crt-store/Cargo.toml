@@ -1,0 +1,19 @@
+[package]
+name = "crt-store"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ReadingStore adapter: one JSON file per reading under a cache directory."
+
+[dependencies]
+crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
+crt-wire = { path = "../crt-wire" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
