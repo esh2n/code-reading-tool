@@ -33,6 +33,7 @@ check crt-treesitter crt-domain crt-app tree-sitter tree-sitter-tags \
 
 check crt-store    crt-domain crt-app crt-wire serde_json
 check crt-llm      crt-domain crt-app reqwest serde serde_json
+check crt-lsp      crt-domain crt-app crt-wire serde serde_json tokio tower-lsp-server
 
 if [ "$fail" -ne 0 ]; then
   exit 1

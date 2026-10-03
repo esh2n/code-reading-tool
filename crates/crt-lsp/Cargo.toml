@@ -1,0 +1,19 @@
+[package]
+name = "crt-lsp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Driving adapter: the use cases served over LSP with custom methods."
+
+[dependencies]
+crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
+crt-wire = { path = "../crt-wire" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
+tower-lsp-server = "0.23"
+
+[lints]
+workspace = true

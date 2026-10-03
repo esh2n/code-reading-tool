@@ -63,6 +63,11 @@ enum Command {
         #[command(flatten)]
         at: Locations,
     },
+    /// Serve the editor integration over LSP on stdin/stdout.
+    Lsp {
+        #[command(flatten)]
+        at: Locations,
+    },
     /// List the bundled languages and their file extensions.
     Languages,
 }
@@ -85,6 +90,7 @@ fn main() -> Result<()> {
             read(&file, &selector, refresh, &at)
         }
         Command::Cached { file, at } => cached(&file, &at),
+        Command::Lsp { at } => lsp(&at),
         Command::Languages => {
             for l in TreeSitterSource::languages() {
                 println!("{}\t{}", l.id, l.extensions.join(","));
@@ -172,4 +178,31 @@ fn cached(file: &Path, at: &Locations) -> Result<()> {
             .map(|r| r.as_ref().map(ReadingDto::from))
             .collect(),
     })
+}
+
+fn lsp(at: &Locations) -> Result<()> {
+    use std::sync::Arc;
+
+    let store = Arc::new(FileStore::new(config::cache_dir(at.cache_dir.as_deref())?));
+    // A missing or broken configuration must not stop the editor from
+    // showing structural facts; it turns explanations off and says why.
+    let (explainer, explainer_unavailable) = match explainer(at) {
+        Ok(e) => (
+            Some(Arc::new(e) as Arc<dyn crt_app::Explainer + Send + Sync>),
+            None,
+        ),
+        Err(e) => (None, Some(format!("{e:#}"))),
+    };
+    let services = crt_lsp::Services {
+        structure: Arc::new(TreeSitterSource),
+        explainer,
+        explainer_unavailable,
+        store,
+    };
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?
+        .block_on(crt_lsp::serve_stdio(services));
+    Ok(())
 }
