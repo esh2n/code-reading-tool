@@ -67,8 +67,12 @@ fn tags_config(grammar: &'static Grammar) -> Result<Arc<TagsConfiguration>, Stru
     if let Some(c) = configs.get(grammar.id) {
         return Ok(Arc::clone(c));
     }
-    let config = TagsConfiguration::new(grammar.language(), grammar.tags_query, "")
-        .map_err(|e| StructureError::Parse(format!("{}: tags query: {e}", grammar.id)))?;
+    let config = TagsConfiguration::new(
+        grammar.language(),
+        &grammar.tags_query(),
+        grammar.locals_query,
+    )
+    .map_err(|e| StructureError::Parse(format!("{}: tags query: {e}", grammar.id)))?;
     let config = Arc::new(config);
     configs.insert(grammar.id, Arc::clone(&config));
     Ok(config)
@@ -129,7 +133,8 @@ fn kind_from(syntax_type: &str) -> SymbolKind {
         "class" | "type" => SymbolKind::Type,
         "interface" => SymbolKind::Interface,
         "module" => SymbolKind::Module,
-        "call" => SymbolKind::Call,
+        // C# names member calls `send`.
+        "call" | "send" => SymbolKind::Call,
         other => SymbolKind::Other(other.to_string()),
     }
 }

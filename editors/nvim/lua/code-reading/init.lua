@@ -14,7 +14,10 @@ local defaults = {
   --- Command that starts the server. Default: the binary installed by
   --- :CrInstall if present, else `crt` on PATH.
   cmd = nil,
-  filetypes = { "rust", "go", "python", "javascript", "javascriptreact" },
+  filetypes = {
+    "rust", "go", "python", "javascript", "javascriptreact", "typescript", "typescriptreact",
+    "java", "c", "cpp", "cs", "ruby", "php",
+  },
   --- Read uncached functions in view without being asked.
   auto_read = true,
   --- How many functions may be read at once.

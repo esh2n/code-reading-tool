@@ -25,7 +25,11 @@ One Rust binary, `crt`, does the work and serves editors over LSP:
    hash, and pushed to the editor. Editing a function invalidates only its
    explanation.
 
-Languages bundled today: Rust, Go, Python, JavaScript.
+Languages bundled today: Rust, Go, Python, JavaScript, TypeScript (and TSX),
+Java, C, C++, C#, Ruby, PHP. Adding one is a row in
+`crates/crt-treesitter/src/grammars.rs` plus, where the grammar's own tags
+query misses functions or calls, a query file in
+`crates/crt-treesitter/queries/<language>/`.
 
 ## Configure a model
 

@@ -23,7 +23,21 @@ import {
 } from "./protocol";
 import { scenarioLabel, scenarioText } from "./scenario";
 
-const SELECTOR = ["rust", "go", "python", "javascript", "javascriptreact"].map((language) => ({
+const SELECTOR = [
+  "rust",
+  "go",
+  "python",
+  "javascript",
+  "javascriptreact",
+  "typescript",
+  "typescriptreact",
+  "java",
+  "c",
+  "cpp",
+  "csharp",
+  "ruby",
+  "php",
+].map((language) => ({
   scheme: "file",
   language,
 }));
