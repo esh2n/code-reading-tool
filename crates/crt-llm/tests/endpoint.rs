@@ -8,7 +8,7 @@ use std::thread;
 
 use crt_app::{ExplainError, ExplainRequest, Explainer};
 use crt_domain::{
-    Basis, Call, ContentHash, FactRef, Function, LanguageId, LineFacts, Span, SymbolKind,
+    Basis, Call, ContentHash, Function, LanguageId, LineFacts, Span, SymbolKind,
 };
 use crt_llm::{EndpointConfig, LlmConfig, OpenAiCompatible};
 use serde_json::{Value, json};
@@ -90,9 +90,9 @@ fn events(content: &str, size: usize) -> String {
     out
 }
 
-const GOOD: &str = r#"{"notes":[{"line":6,"text":"calls helper","detail":"","assumptions":[],"basis":{"kind":"fact","call":"helper"}}]}"#;
+const GOOD: &str = r#"{"notes":[{"line":6,"text":"calls helper","detail":"","assumptions":[]}]}"#;
 
-const TWO_NOTES: &str = r#"{"notes":[{"line":5,"text":"copies c","detail":"","assumptions":[],"basis":{"kind":"inference","call":null}},{"line":6,"text":"calls helper","detail":"","assumptions":[],"basis":{"kind":"fact","call":"helper"}}]}"#;
+const TWO_NOTES: &str = r#"{"notes":[{"line":5,"text":"copies c","detail":"","assumptions":[]},{"line":6,"text":"calls helper","detail":"","assumptions":[]}]}"#;
 
 const SCENARIOS: &str = r#"{"scenarios":[{"kind":"normal","title":"ok","input":"c","steps":[{"line":6,"what":"returns"}],"outcome":"copy","assumptions":[]}]}"#;
 
@@ -151,15 +151,14 @@ fn request() -> ExplainRequest {
 fn sends_a_strict_schema_and_parses_the_answer() {
     let s = serve(vec![(200, completion(GOOD))]);
     let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
-    assert_eq!(llm.authors()[0].prompt, "v4-japanese");
+    assert_eq!(llm.authors()[0].prompt, "v5-japanese");
     let out = llm.explain(&request(), &mut |_| {}).unwrap();
     assert_eq!(out.author.model, "primary-model");
     assert!(out.warnings.is_empty());
     assert_eq!(
         out.draft.notes[0].basis,
-        Basis::Fact(FactRef::Call {
-            name: "helper".into()
-        })
+        Basis::Inference,
+        "a model's note is never a fact"
     );
 
     let body = &s.seen.lock().unwrap()[0];
@@ -348,7 +347,7 @@ fn extra_body_is_sent_but_never_overrides_the_core_fields() {
     c.extra_body
         .insert("response_format".into(), json!({ "type": "text" }));
     let llm = OpenAiCompatible::new(c).unwrap();
-    assert!(llm.authors()[0].prompt.starts_with("v4-japanese-x"));
+    assert!(llm.authors()[0].prompt.starts_with("v5-japanese-x"));
     llm.explain(&request(), &mut |_| {}).unwrap();
     let body = &s.seen.lock().unwrap()[0];
     assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
@@ -370,7 +369,7 @@ fn streamed_notes_arrive_one_by_one() {
 
 #[test]
 fn a_retry_starts_the_progress_over() {
-    let broken = r#"{"notes":[{"line":5,"text":"a","detail":"","assumptions":[],"basis":{"kind":"inference","call":null}},{"#;
+    let broken = r#"{"notes":[{"line":5,"text":"a","detail":"","assumptions":[]},{"#;
     let s = serve(vec![(200, events(broken, 7)), (200, events(GOOD, 7))]);
     let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
     let mut seen: Vec<usize> = vec![];

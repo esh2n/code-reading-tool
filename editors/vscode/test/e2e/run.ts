@@ -35,12 +35,12 @@ function answerFor(task: string, user: string): (string | null)[] {
     return [JSON.stringify(content)];
   }
   if (user.includes("FUNCTION: Inc")) {
-    const first = { line: 5, text: "increments c.n", detail: "", assumptions: [], basis: { kind: "inference", call: null } };
-    const second = { line: 6, text: "calls add", detail: "adds one", assumptions: [], basis: { kind: "fact", call: "add" } };
+    const first = { line: 5, text: "increments c.n", detail: "", assumptions: [] };
+    const second = { line: 6, text: "calls add", detail: "adds one", assumptions: [] };
     return [`{"notes":[${JSON.stringify(first)},`, null, `${JSON.stringify(second)}]}`];
   }
   const content = {
-    notes: [{ line: 9, text: "returns the sum", detail: "", assumptions: [], basis: { kind: "inference", call: null } }],
+    notes: [{ line: 9, text: "returns the sum", detail: "", assumptions: [] }],
   };
   return [JSON.stringify(content)];
 }

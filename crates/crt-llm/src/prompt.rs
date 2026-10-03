@@ -6,9 +6,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crt_app::ExplainRequest;
-use crt_domain::{Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Step, SymbolKind};
+use crt_domain::{Basis, Draft, Note, Scenario, ScenarioKind, Step, SymbolKind};
 
-pub(crate) const VERSION: u32 = 4;
+pub(crate) const VERSION: u32 = 5;
 
 /// The two questions asked about a function: its notes (asked when a file
 /// opens) and its scenarios (asked only on request).
@@ -86,9 +86,8 @@ const NOTES: &str =
   Never restate the code ('creates the command', 'returns the value', 'iterates over',
   'sets stdin to null').
 - detail: a longer explanation for a hover, or an empty string.
-- basis.kind = \"fact\" only when the note merely states that the line calls a function
-  listed under STRUCTURAL FACTS for that same line; then basis.call is that function's name.
-  Everything else is basis.kind = \"inference\" with basis.call = null.
+- STRUCTURAL FACTS are shown to the reader already; do not write a note that only repeats
+  which function a line calls.
 - assumptions: what the explanation takes for granted (inputs, caller behaviour,
   what an unseen function does). Empty when nothing is assumed.";
 
@@ -165,21 +164,12 @@ pub(crate) fn schema(task: Task) -> Value {
             json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["line", "text", "detail", "assumptions", "basis"],
+                "required": ["line", "text", "detail", "assumptions"],
                 "properties": {
                     "line": { "type": "integer" },
                     "text": { "type": "string" },
                     "detail": { "type": "string" },
-                    "assumptions": strings,
-                    "basis": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["kind", "call"],
-                        "properties": {
-                            "kind": { "type": "string", "enum": ["fact", "inference"] },
-                            "call": { "type": ["string", "null"] }
-                        }
-                    }
+                    "assumptions": strings
                 }
             }),
         ),
@@ -238,21 +228,6 @@ struct AnswerNote {
     text: String,
     detail: String,
     assumptions: Vec<String>,
-    basis: AnswerBasis,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AnswerBasis {
-    kind: AnswerBasisKind,
-    call: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum AnswerBasisKind {
-    Fact,
-    Inference,
 }
 
 #[derive(Deserialize)]
@@ -323,12 +298,9 @@ fn note(n: AnswerNote) -> Note {
         text: unescape(n.text),
         detail: Some(unescape(n.detail)).filter(|d| !d.trim().is_empty()),
         assumptions: unescape_all(n.assumptions),
-        basis: match (n.basis.kind, n.basis.call) {
-            (AnswerBasisKind::Fact, Some(name)) if !name.is_empty() => {
-                Basis::Fact(FactRef::Call { name })
-            }
-            _ => Basis::Inference,
-        },
+        // What a model writes about behaviour is reasoning, never a fact:
+        // facts come from the syntax tree, not from the model's say-so.
+        basis: Basis::Inference,
     }
 }
 
@@ -367,8 +339,8 @@ mod tests {
     #[test]
     fn identity_folds_the_output_language_into_a_safe_token() {
         let none = serde_json::Map::new();
-        assert_eq!(identity("Japanese", &none), "v4-japanese");
-        assert_eq!(identity("pt-BR", &none), "v4-ptbr");
+        assert_eq!(identity("Japanese", &none), "v5-japanese");
+        assert_eq!(identity("pt-BR", &none), "v5-ptbr");
         let mut off = serde_json::Map::new();
         off.insert(
             "chat_template_kwargs".into(),
@@ -380,27 +352,27 @@ mod tests {
             serde_json::json!({ "enable_thinking": true }),
         );
         let (a, b) = (identity("Japanese", &off), identity("Japanese", &on));
-        assert!(a.starts_with("v4-japanese-x"), "{a}");
+        assert!(a.starts_with("v5-japanese-x"), "{a}");
         assert_ne!(a, b, "different request options are different readings");
         assert_eq!(a, identity("Japanese", &off), "stable");
     }
 
     #[test]
-    fn parses_notes_and_treats_a_nameless_fact_as_inference() {
+    fn every_note_from_the_model_is_an_inference() {
         let content = r#"{
           "notes": [
-            {"line": 3, "text": "calls x", "detail": "", "assumptions": [], "basis": {"kind": "fact", "call": "x"}},
-            {"line": 4, "text": "?", "detail": "long", "assumptions": ["a"], "basis": {"kind": "fact", "call": null}}
+            {"line": 3, "text": "calls x", "detail": "", "assumptions": []},
+            {"line": 4, "text": "?", "detail": "long", "assumptions": ["a"]}
           ]
         }"#;
         let draft = parse_notes(content).unwrap();
-        assert_eq!(
-            draft.notes[0].basis,
-            Basis::Fact(FactRef::Call { name: "x".into() })
-        );
+        assert!(draft.notes.iter().all(|n| n.basis == Basis::Inference));
         assert_eq!(draft.notes[0].detail, None);
-        assert_eq!(draft.notes[1].basis, Basis::Inference);
         assert_eq!(draft.notes[1].detail.as_deref(), Some("long"));
+        assert!(
+            parse_notes(r#"{"notes":[{"line":1,"text":"t","detail":"","assumptions":[],"basis":{"kind":"fact","call":"x"}}]}"#).is_err(),
+            "a model cannot claim a fact"
+        );
     }
 
     #[test]
@@ -415,7 +387,7 @@ mod tests {
 
     #[test]
     fn html_entities_from_the_model_become_characters() {
-        let notes = r#"{"notes":[{"line":1,"text":"takes &amp;str","detail":"a &lt; b &amp;&amp; c","assumptions":["x &gt; 0"],"basis":{"kind":"inference","call":null}}]}"#;
+        let notes = r#"{"notes":[{"line":1,"text":"takes &amp;str","detail":"a &lt; b &amp;&amp; c","assumptions":["x &gt; 0"]}]}"#;
         let d = parse_notes(notes).unwrap();
         assert_eq!(d.notes[0].text, "takes &str");
         assert_eq!(d.notes[0].detail.as_deref(), Some("a < b && c"));

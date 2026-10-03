@@ -46,7 +46,7 @@ export async function run(): Promise<void> {
   const lines = api.annotationsFor(uri).map((a) => [a.line, a.style, a.text]);
   assert.deepEqual(lines, [
     [5, "guess", "◌ increments c.n"],
-    [6, "fact", "● calls add"],
+    [6, "guess", "◌ calls add"],
     [9, "guess", "◌ returns the sum"],
   ]);
 
@@ -60,7 +60,7 @@ export async function run(): Promise<void> {
     .flatMap((h) => h.contents)
     .map((c) => (typeof c === "string" ? c : c.value))
     .join("\n");
-  assert.match(md, /\*\*calls add\*\* _\(fact\)_/);
+  assert.match(md, /\*\*calls add\*\* _\(guess\)_/);
 
   // The first request for scenarios writes them; the view opens beside
   // the source.
@@ -122,7 +122,7 @@ export async function run(): Promise<void> {
   await until(() => (at6()?.style === "stale" ? true : undefined), 10000, "the old note after the edit");
   assert.equal(at6()?.text, "(old) calls add");
   await doc.save();
-  await until(() => (at6()?.style === "fact" ? true : undefined), 15000, "the note read again after saving");
+  await until(() => (at6()?.style === "guess" ? true : undefined), 15000, "the note read again after saving");
 
   // An explicit read is served from the cache.
   await vscode.window.showTextDocument(doc);

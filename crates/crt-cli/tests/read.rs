@@ -50,14 +50,10 @@ fn completion(content: String) -> String {
 fn notes() -> String {
     completion(json!({
         "notes": [
-            { "line": 6, "text": "calls helper", "detail": "", "assumptions": [],
-              "basis": { "kind": "fact", "call": "helper" } },
-            { "line": 5, "text": "claims a call that is not on this line", "detail": "", "assumptions": [],
-              "basis": { "kind": "fact", "call": "helper" } },
-            { "line": 6, "text": "returns a copy", "detail": "", "assumptions": ["helper does not mutate c"],
-              "basis": { "kind": "inference", "call": null } },
-            { "line": 42, "text": "outside the function", "detail": "", "assumptions": [],
-              "basis": { "kind": "inference", "call": null } }
+            { "line": 6, "text": "calls helper", "detail": "", "assumptions": [] },
+            { "line": 5, "text": "claims a call that is not on this line", "detail": "", "assumptions": [] },
+            { "line": 6, "text": "returns a copy", "detail": "", "assumptions": ["helper does not mutate c"] },
+            { "line": 42, "text": "outside the function", "detail": "", "assumptions": [] }
         ]
     })
     .to_string())
@@ -118,17 +114,16 @@ fn reads_checks_caches_and_lists() {
     assert_eq!(first["function"]["enclosing"], "C");
     let r = &first["reading"];
     assert_eq!(r["model"], "test-model");
-    assert_eq!(r["prompt"], "v4-japanese");
-    assert_eq!(r["demoted"], 1, "the false fact on line 5 is demoted");
+    assert_eq!(r["prompt"], "v5-japanese");
+    assert_eq!(
+        r["demoted"], 0,
+        "the model cannot claim facts, so none is demoted"
+    );
     assert_eq!(r["dropped"], 1, "the note on line 42 is dropped");
     let notes = r["notes"].as_array().unwrap();
     assert_eq!(notes.len(), 3);
     assert_eq!(notes[0]["line"], 5);
-    assert_eq!(notes[0]["basis"]["kind"], "inference");
-    assert_eq!(
-        notes[1]["basis"],
-        json!({ "kind": "fact", "call": "helper" })
-    );
+    assert!(notes.iter().all(|n| n["basis"]["kind"] == "inference"));
     assert!(r["scenarios"].is_null(), "scenarios wait to be asked for");
 
     // Scenarios are a second request; the notes come from the cache.
@@ -174,7 +169,7 @@ fn reads_checks_caches_and_lists() {
         .success();
     let html = fs::read_to_string(out).unwrap();
     assert!(html.contains("method C.Copy"));
-    assert!(html.contains(r#"<span class="n fact">calls helper</span>"#));
+    assert!(html.contains(r#"<span class="n guess">calls helper</span>"#));
     assert!(html.contains("nil receiver"));
     assert!(html.contains("Run <code>crt read --line 9</code>"));
 }

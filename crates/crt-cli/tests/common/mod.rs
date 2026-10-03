@@ -26,10 +26,9 @@ fn answer_for(task: &str, user: &str) -> Vec<Option<String>> {
         return vec![Some(content.to_string())];
     }
     if inc {
-        let first = json!({ "line": 5, "text": "increments c.n", "detail": "", "assumptions": [],
-                            "basis": { "kind": "inference", "call": null } });
-        let second = json!({ "line": 6, "text": "calls add", "detail": "adds one", "assumptions": [],
-                             "basis": { "kind": "fact", "call": "add" } });
+        let first = json!({ "line": 5, "text": "increments c.n", "detail": "", "assumptions": [] });
+        let second =
+            json!({ "line": 6, "text": "calls add", "detail": "adds one", "assumptions": [] });
         // The second note comes later, so the first is seen on its own.
         return vec![
             Some(format!("{{\"notes\":[{first},")),
@@ -37,8 +36,7 @@ fn answer_for(task: &str, user: &str) -> Vec<Option<String>> {
             Some(format!("{second}]}}")),
         ];
     }
-    let content = json!({ "notes": [ { "line": 9, "text": "returns the sum", "detail": "", "assumptions": [],
-              "basis": { "kind": "inference", "call": null } } ] });
+    let content = json!({ "notes": [ { "line": 9, "text": "returns the sum", "detail": "", "assumptions": [] } ] });
     vec![Some(content.to_string())]
 }
 

@@ -50,7 +50,7 @@ end, 50), "readings did not arrive")
 check(saw_partial, "notes were not shown while they arrived")
 check(not state.present(state.get(buf).params.readings[1].scenarios), "scenarios were written before being asked for")
 
--- End-of-line annotations: a fact note on line 6.
+-- End-of-line annotations: a note on line 6.
 local marks = vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, { details = true })
 local by_line = {}
 for _, m in ipairs(marks) do
@@ -60,8 +60,9 @@ for _, m in ipairs(marks) do
   end
   by_line[m[2] + 1] = { text = table.concat(text), hl = m[4].virt_text[1][2] }
 end
-check(by_line[6] and by_line[6].text:find("● calls add", 1, true), "no fact note on line 6: " .. vim.inspect(by_line))
-check(by_line[6].hl == "CodeReadingFact", "fact note is not highlighted as a fact")
+-- Every note from the model is a guess; facts come from the syntax tree.
+check(by_line[6] and by_line[6].text:find("◌ calls add", 1, true), "no note on line 6: " .. vim.inspect(by_line))
+check(by_line[6].hl == "CodeReadingGuess", "a model's note is not shown as a guess")
 check(by_line[9] and by_line[9].text:find("◌ returns the sum", 1, true), "no guess note on line 9")
 
 -- Hover goes through Neovim's own LSP client.
@@ -143,7 +144,7 @@ vim.api.nvim_buf_call(buf, function()
   vim.cmd("silent write")
 end)
 check(vim.wait(10000, function()
-  return line_text(6):find("● calls add", 1, true) ~= nil
+  return line_text(6):find("◌ calls add", 1, true) ~= nil
 end, 50), "not read again after saving: " .. line_text(6))
 
 -- :CrConfig opens the configuration file the server reads.

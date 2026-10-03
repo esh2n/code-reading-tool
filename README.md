@@ -1,17 +1,16 @@
 # crt — read code by how it behaves
 
-`crt` puts a short explanation at the end of every line of a function, in
-Neovim and VS Code, and can walk a function through concrete inputs: a normal
+`crt` puts short explanations at the end of the lines of a function that need
+one, in Neovim and VS Code, and can walk a function through concrete inputs: a normal
 case, boundary values, and two calls at once.
 
 Every explanation says what it rests on:
 
-- **fact** (●) — read off the syntax tree: "this line calls `add`".
-- **guess** (◌) — the model's reasoning about behaviour, with the assumptions
-  it makes. Nothing is executed; read guesses as guesses.
-
-A note that claims a fact the code does not have is demoted to a guess before
-you see it.
+- **fact** (`→ add`, and "Calls" in the hover) — read off the syntax tree:
+  "this line calls `add`". Only `crt` itself states facts.
+- **guess** (◌) — everything the model writes: its reasoning about
+  behaviour, with the assumptions it makes. Nothing is executed; read
+  guesses as guesses. The model cannot mark its own text as a fact.
 
 ## How it works
 
@@ -21,8 +20,8 @@ One Rust binary, `crt`, does the work and serves editors over LSP:
    grammars).
 2. Functions in view that have no cached explanation are sent to an
    OpenAI-compatible model with a strict JSON Schema, one function at a time.
-3. Results are checked against the facts, cached by the function's content
-   hash, and pushed to the editor. Editing a function invalidates only its
+3. Results are checked against the function (notes outside it are dropped),
+   cached by the function's content hash, and pushed to the editor. Editing a function invalidates only its
    explanation.
 
 Languages bundled today: Rust, Go, Python, JavaScript, TypeScript (and TSX),

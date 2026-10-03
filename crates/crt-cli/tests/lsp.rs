@@ -195,10 +195,7 @@ fn facts_on_open_readings_on_view_hover_diagnostics_and_cache() {
     });
     assert_eq!(done["params"]["partial"], json!([]));
     let inc = &done["params"]["readings"][0];
-    assert_eq!(
-        inc["notes"][1]["basis"],
-        json!({ "kind": "fact", "call": "add" })
-    );
+    assert_eq!(inc["notes"][1]["basis"], json!({ "kind": "inference" }));
     assert!(inc["scenarios"].is_null(), "scenarios wait to be asked for");
 
     // Asking for scenarios writes them and keeps them with the notes; the
@@ -238,7 +235,7 @@ fn facts_on_open_readings_on_view_hover_diagnostics_and_cache() {
         json!({ "textDocument": { "uri": uri }, "position": { "line": 5, "character": 2 } }),
     );
     let md = hover["contents"]["value"].as_str().unwrap();
-    assert!(md.contains("**calls add** _(fact)_"), "{md}");
+    assert!(md.contains("**calls add** _(guess)_"), "{md}");
     assert!(md.contains("Calls: `add` (this file)"), "{md}");
 
     // An explicit read now comes from the cache.
