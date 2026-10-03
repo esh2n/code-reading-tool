@@ -69,9 +69,11 @@ Schema); `crt` refuses to fall back to free-form text.
 
 ```sh
 crt analyze path/to/file.go              # structural facts as JSON, no model
-crt read path/to/file.go --func Copy     # explain one function (or --line N)
+crt read path/to/file.go --func Copy     # per-line notes for one function (or --line N);
+                                         # --progress prints each note as it arrives
+crt scenarios path/to/file.go --func Copy  # normal, boundary and concurrent walk-throughs
 crt cached path/to/file.go               # what is already explained
-crt render path/to/file.go --out p.html  # one HTML page; --read-missing explains the rest
+crt render path/to/file.go --out p.html  # one HTML page; --read-missing writes what is missing
 crt languages
 ```
 
@@ -95,12 +97,15 @@ the release's SHA-256), or put `crt` on your `PATH`.
 |---|---|
 | `K` (hover) | the full explanation, its assumptions, and the facts on that line |
 | `:CrRead[!]` | explain the function under the cursor now (`!` asks the model again) |
-| `:CrScenario` | pick a scenario and see its steps beside the code; `<CR>` jumps to a step |
+| `:CrScenario[!]` | pick a scenario and see its steps beside the code; `<CR>` jumps to a step. The first use for a function asks the model to write them (`!` writes them again) |
 | `:CrToggle` | hide or show the annotations |
+| diagnostics | concurrency scenarios, with the lines that interleave as related locations |
+
+Notes appear one by one while the model writes them. Scenarios are written
+only when asked for, so opening a file costs one short request per function.
 
 A local model that serves one request at a time gains nothing from parallel
 reads: pass `max_parallel = 1` to `setup()`.
-| diagnostics | concurrency scenarios, with the lines that interleave as related locations |
 
 ### VS Code
 

@@ -24,7 +24,7 @@
 | `crt-llm` | アダプタ | `Explainer` ポートの実装。OpenAI 互換 API、構造化出力必須、形が崩れたら同じ宛先に 2 回まで、つながらないか 5xx なら予備の宛先へ。プロンプトと出力の JSON Schema もここ | `crt-app`、`crt-domain`、reqwest、serde |
 | `crt-store` | アダプタ | `ReadingStore` ポートの実装。利用者のキャッシュ領域に 1 読みにつき 1 つの JSON ファイルで保存（一時ファイルに書いて改名） | `crt-app`、`crt-domain`、`crt-wire`（保存の形は外に出す JSON と同じ） |
 | `crt-wire` | アダプタ（プレゼンタ） | 外に出す JSON の形（DTO）と、ユースケースの出力からの変換。LSP の独自メソッド、CLI の出力、HTML の入力が共有する | `crt-app`、`crt-domain`、serde |
-| `crt-lsp` | アダプタ（駆動側） | ユースケースを LSP で提供する。標準の hover と診断、独自メソッド `codeReading/read`・`codeReading/visibleRange`・`codeReading/fileReadings`（形は `crt-wire::protocol`）。ポートは同期なので、呼び出しは blocking スレッドで動かす | `crt-app`、`crt-domain`、`crt-wire`、tower-lsp-server、tokio |
+| `crt-lsp` | アダプタ（駆動側） | ユースケースを LSP で提供する。標準の hover と診断、独自メソッド `codeReading/read`・`codeReading/scenarios`・`codeReading/visibleRange`・`codeReading/fileReadings`（形は `crt-wire::protocol`）。生成中の注釈は blocking スレッドから 0.25 秒に 1 回 `fileReadings` で送る。ポートは同期なので、呼び出しは blocking スレッドで動かす | `crt-app`、`crt-domain`、`crt-wire`、tower-lsp-server、tokio |
 | `crt-html` | プレゼンタ | 読みの JSON から静的 HTML を 1 ページ描く。モデルの文は必ずエスケープ | `crt-wire`、minijinja |
 | `crt-cli` | 組み立て | 実装をポートに差し込み、ユースケースを呼び、`crt-wire` で出す。`crt lsp` も同じバイナリ | すべて |
 | `editors/nvim`、`editors/vscode` | エディタ側 | `crt lsp` を起動し、`codeReading/fileReadings` を描き、見えている範囲を伝える。判断はしない | LSP クライアント |
