@@ -110,11 +110,21 @@ end
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
 check(vim.api.nvim_get_current_buf() == buf and vim.api.nvim_win_get_cursor(0)[1] == 6, "<CR> did not jump to line 6")
 
--- Toggle hides and shows.
+-- Toggle hides and shows, and the statusline part follows.
+check(cr.status() == "crt on", "status: " .. cr.status())
 cr.toggle()
 check(#vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, {}) == 0, "toggle did not hide")
+check(cr.status() == "crt off", "status: " .. cr.status())
 cr.toggle()
 check(#vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, {}) > 0, "toggle did not show")
+
+-- :CrConfig opens the configuration file the server reads.
+vim.api.nvim_set_current_buf(buf)
+cr.open_config()
+check(vim.wait(5000, function()
+  return vim.api.nvim_buf_get_name(0) == vim.fn.resolve(os.getenv("CRT_CONFIG"))
+    or vim.api.nvim_buf_get_name(0) == os.getenv("CRT_CONFIG")
+end, 50), "config not opened: " .. vim.api.nvim_buf_get_name(0))
 
 io.stdout:write("OK\n")
 vim.cmd("qall!")

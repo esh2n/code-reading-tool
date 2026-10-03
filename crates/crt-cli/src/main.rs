@@ -2,6 +2,7 @@
 //! cases, prints wire JSON.
 
 mod config;
+mod reloading;
 
 use std::path::{Path, PathBuf};
 
@@ -112,6 +113,12 @@ enum Command {
         #[command(flatten)]
         at: Locations,
     },
+    /// Print the configuration file's path, writing a commented example
+    /// there first when it does not exist.
+    Config {
+        #[command(flatten)]
+        at: Locations,
+    },
     /// List the bundled languages and their file extensions.
     Languages,
 }
@@ -133,6 +140,14 @@ fn main() -> Result<()> {
             read_missing,
             at,
         } => render(&file, out.as_deref(), read_missing, &at),
+        Command::Config { at } => {
+            let path = config::config_path(at.config.as_deref())?;
+            if config::write_example_if_missing(&path)? {
+                eprintln!("wrote an example configuration; edit it before reading");
+            }
+            println!("{}", path.display());
+            Ok(())
+        }
         Command::Languages => {
             for l in TreeSitterSource::languages() {
                 println!("{}\t{}", l.id, l.extensions.join(","));
@@ -265,20 +280,28 @@ fn lsp(at: &Locations) -> Result<()> {
     use std::sync::Arc;
 
     let store = Arc::new(FileStore::new(config::cache_dir(at.cache_dir.as_deref())?));
-    // A missing or broken configuration must not stop the editor from
-    // showing structural facts; it turns explanations off and says why.
-    let (explainer, explainer_unavailable) = match explainer(at) {
-        Ok(e) => (
-            Some(Arc::new(e) as Arc<dyn crt_app::Explainer + Send + Sync>),
-            None,
-        ),
-        Err(e) => (None, Some(format!("{e:#}"))),
-    };
+    // The configuration is read on each model call and again whenever the
+    // file changes. A missing or broken file never stops the editor from
+    // showing structural facts; reads say what is wrong with it.
+    let path = config::config_path(at.config.as_deref())?;
+    let explainer = reloading::Reloading::new(path.clone());
+    if let Err(why) = explainer.current() {
+        eprintln!("crt: explanations are unavailable until the configuration is fixed: {why}");
+    }
     let services = crt_lsp::Services {
         structure: Arc::new(TreeSitterSource),
-        explainer,
-        explainer_unavailable,
+        explainer: Some(Arc::new(explainer)),
+        explainer_unavailable: None,
         store,
+        config_file: Some(crt_lsp::ConfigFile {
+            ensure_exists: {
+                let path = path.clone();
+                Arc::new(move || {
+                    config::write_example_if_missing(&path).map_err(|e| format!("{e:#}"))
+                })
+            },
+            path,
+        }),
     };
     // Hold one handle outside the runtime so the blocking HTTP client is
     // dropped after the runtime is gone; dropping it inside the runtime

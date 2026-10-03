@@ -23,6 +23,18 @@ pub struct Services {
     /// Why `explainer` is `None`, shown to the user on a read.
     pub explainer_unavailable: Option<String>,
     pub store: Arc<dyn ReadingStore + Send + Sync>,
+    /// The configuration file, for `codeReading/configPath`. `None` when
+    /// there is no file to point at.
+    pub config_file: Option<ConfigFile>,
+}
+
+/// Where the configuration lives, and how to start one when it does not
+/// exist yet.
+#[derive(Clone)]
+pub struct ConfigFile {
+    pub path: std::path::PathBuf,
+    /// Writes a starting file unless one exists; true when it wrote one.
+    pub ensure_exists: Arc<dyn Fn() -> Result<bool, String> + Send + Sync>,
 }
 
 /// Serves LSP on the given streams until the client exits.
@@ -34,6 +46,7 @@ where
     let (service, socket) = LspService::build(|client| Backend::new(client, services))
         .custom_method(crt_wire::protocol::READ, Backend::read)
         .custom_method(crt_wire::protocol::SCENARIOS, Backend::scenarios)
+        .custom_method(crt_wire::protocol::CONFIG_PATH, Backend::config_path)
         .custom_method(crt_wire::protocol::VISIBLE_RANGE, Backend::visible_range)
         .finish();
     Server::new(input, output, socket).serve(service).await;

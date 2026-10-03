@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use crt_app::{FunctionSelector, ReadOptions, Readers};
 use crt_domain::{Function, Note, Reading};
 use crt_wire::protocol::{
-    FILE_READINGS, FileReadingsParams, InitOptions, PartialNotesDto, ReadParams, VisibleRangeParams,
+    ConfigPathResult, FILE_READINGS, FileReadingsParams, InitOptions, PartialNotesDto, ReadParams,
+    VisibleRangeParams,
 };
 use crt_wire::{FileAnalysisDto, FunctionReadingDto, NoteDto, ReadingDto};
 use tokio::sync::Semaphore;
@@ -70,6 +71,9 @@ struct Inner {
     /// Auto-reads that failed, and when. They are not retried on every
     /// scroll; an explicit read or the cooldown clears them.
     failed: Mutex<HashMap<(String, String), Instant>>,
+    /// The explainer's authors when auto-read last looked. A change means
+    /// the configuration changed, and earlier failures may not hold.
+    authors_seen: Mutex<Vec<crt_domain::Author>>,
 }
 
 #[derive(Clone)]
@@ -129,6 +133,7 @@ impl Backend {
                 next_read: AtomicU64::new(0),
                 publishing: tokio::sync::Mutex::new(()),
                 failed: Mutex::new(HashMap::new()),
+                authors_seen: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -450,10 +455,40 @@ impl Backend {
         Ok(FunctionReadingDto::from(&result))
     }
 
+    /// `codeReading/configPath`.
+    pub async fn config_path(&self) -> RpcResult<ConfigPathResult> {
+        let Some(file) = self.inner.services.config_file.clone() else {
+            return Err(rpc_error(
+                ErrorCode::InternalError,
+                "this server has no configuration file".into(),
+            ));
+        };
+        let path = file.path.display().to_string();
+        let created = tokio::task::spawn_blocking(move || (file.ensure_exists)())
+            .await
+            .map_err(|e| rpc_error(ErrorCode::InternalError, e.to_string()))?
+            .map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
+        Ok(ConfigPathResult { path, created })
+    }
+
     /// `codeReading/visibleRange`: read uncached functions the user can see.
     pub async fn visible_range(&self, params: VisibleRangeParams) {
-        if !self.options().auto_read || self.inner.services.explainer.is_none() {
+        let Some(explainer) = self.inner.services.explainer.clone() else {
             return;
+        };
+        if !self.options().auto_read {
+            return;
+        }
+        let authors = tokio::task::spawn_blocking(move || explainer.authors())
+            .await
+            .unwrap_or_default();
+        {
+            let mut seen = lock(&self.inner.authors_seen);
+            if *seen != authors {
+                *seen = authors;
+                lock(&self.inner.failed).clear();
+                lock(&self.inner.shown).clear();
+            }
         }
         let Some(doc) = self.doc(&params.uri) else {
             return;

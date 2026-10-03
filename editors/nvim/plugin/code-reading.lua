@@ -17,7 +17,11 @@ end, { bang = true, desc = "Show a behaviour scenario of the function under the 
 
 vim.api.nvim_create_user_command("CrToggle", function()
   cr().toggle()
-end, { desc = "Show or hide code-reading annotations" })
+end, { desc = "Turn explanations on or off (off: nothing shown, no model calls unless asked)" })
+
+vim.api.nvim_create_user_command("CrConfig", function()
+  cr().open_config()
+end, { desc = "Open crt's configuration (endpoint, model, API key, language)" })
 
 vim.api.nvim_create_user_command("CrInstall", function(o)
   local install = require("code-reading.install")

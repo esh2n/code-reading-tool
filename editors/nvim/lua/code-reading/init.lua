@@ -18,6 +18,10 @@ local defaults = {
     "rust", "go", "python", "javascript", "javascriptreact", "typescript", "typescriptreact",
     "java", "c", "cpp", "cs", "ruby", "php",
   },
+  --- Show explanations and write them for the code in view. When off,
+  --- nothing is shown and the model is called only when asked (:CrRead,
+  --- :CrScenario). :CrToggle switches it.
+  enabled = true,
   --- Read uncached functions in view without being asked.
   auto_read = true,
   --- How many functions may be read at once.
@@ -37,7 +41,9 @@ local timers = {}
 --- Tells the server which lines of `bufnr` are visible in any window.
 function M.report_view(bufnr)
   local client = client_for(bufnr)
-  if not client then
+  -- Off means no model calls unless asked: the server reads only what it
+  -- is told is in view.
+  if not client or not state.enabled then
     return
   end
   local first, last
@@ -113,13 +119,60 @@ function M.read(refresh)
   end, bufnr)
 end
 
+--- Opens crt's configuration file (the endpoint, model, key and output
+--- language shared by every editor), creating a commented example first
+--- when there is none. Changes apply on the next read; no restart needed.
+function M.open_config()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local client = client_for(bufnr)
+  if not client then
+    vim.notify("crt: no crt server attached to this buffer", vim.log.levels.WARN)
+    return
+  end
+  -- A custom method; Neovim's annotations only list the standard ones.
+  ---@diagnostic disable-next-line: param-type-mismatch
+  client:request("codeReading/configPath", vim.NIL, function(err, result)
+    if err then
+      vim.notify("crt: " .. err.message, vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd.edit(vim.fn.fnameescape(result.path))
+    if result.created then
+      vim.notify("crt: wrote an example configuration; edit it to choose a model")
+    end
+  end, bufnr)
+end
+
 function M.toggle()
   state.enabled = not state.enabled
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(bufnr) then
       render.draw(bufnr)
+      if state.enabled then
+        M.report_view(bufnr)
+      end
     end
   end
+  vim.cmd.redrawstatus()
+end
+
+--- A short text for a statusline: whether explanations are on, and whether
+--- some are being written for the current buffer. Empty when the buffer has
+--- no crt server. For lualine: `{ require("code-reading").status, on_click =
+--- function() require("code-reading").toggle() end }`.
+function M.status()
+  local bufnr = vim.api.nvim_get_current_buf()
+  if not client_for(bufnr) then
+    return ""
+  end
+  if not state.enabled then
+    return "crt off"
+  end
+  local s = state.get(bufnr)
+  if s and next(s.pending) then
+    return "crt …"
+  end
+  return "crt on"
 end
 
 M.scenario = scenario.open
@@ -135,6 +188,7 @@ end
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
   M.config.cmd = M.config.cmd or default_cmd()
+  state.enabled = M.config.enabled
   render.define_highlights()
 
   vim.lsp.config("crt", {

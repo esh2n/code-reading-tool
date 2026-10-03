@@ -93,6 +93,24 @@ export async function run(): Promise<void> {
   assert.match(diag.message, /two Inc at once/);
   assert.equal(diag.relatedInformation?.[0]?.location.range.start.line, 6);
 
+  // The status bar item turns explanations off and on; the choice is a
+  // setting, so it survives a restart.
+  await vscode.window.showTextDocument(doc);
+  assert.match(api.statusText() ?? "", /\$\(eye\) Code Reading/);
+  await vscode.commands.executeCommand("codeReading.toggle");
+  await until(() => (api.statusText()?.includes("eye-closed") ? true : undefined), 5000, "explanations off");
+  assert.equal(vscode.workspace.getConfiguration("codeReading").get("enabled"), false);
+  await vscode.commands.executeCommand("codeReading.toggle");
+  await until(() => (api.statusText()?.includes("$(eye)") ? true : undefined), 5000, "explanations on");
+
+  // The configuration file opens from a command.
+  await vscode.commands.executeCommand("codeReading.openConfig");
+  await until(
+    () => (vscode.window.activeTextEditor?.document.uri.fsPath.endsWith("config.toml") ? true : undefined),
+    5000,
+    "the configuration file",
+  );
+
   // An explicit read is served from the cache.
   await vscode.window.showTextDocument(doc);
   await vscode.commands.executeCommand("codeReading.read");

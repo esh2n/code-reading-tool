@@ -19,6 +19,8 @@ import {
   type FunctionReadingDto,
   READ,
   type ReadingDto,
+  CONFIG_PATH,
+  type ConfigPathResult,
   SCENARIOS,
   VISIBLE_RANGE,
 } from "./protocol";
@@ -47,7 +49,35 @@ const SCENARIO_SCHEME = "crt-scenario";
 
 let client: LanguageClient | undefined;
 const latest = new Map<string, FileReadingsParams>();
+/** `codeReading.enabled`: annotations shown and auto-read on. */
 let enabled = true;
+let status: vscode.StatusBarItem | undefined;
+
+function readEnabled(): boolean {
+  return vscode.workspace.getConfiguration("codeReading").get<boolean>("enabled", true);
+}
+
+/** The status bar item: whether explanations are on, and whether some are being written. */
+function updateStatus(): void {
+  if (!status) return;
+  const doc = vscode.window.activeTextEditor?.document;
+  if (!doc || vscode.languages.match(SELECTOR, doc) === 0) {
+    status.hide();
+    return;
+  }
+  const writing = (latest.get(doc.uri.toString())?.pending.length ?? 0) > 0;
+  if (!enabled) {
+    status.text = "$(eye-closed) Code Reading";
+    status.tooltip = "Explanations are off. Click to turn them on.";
+  } else if (writing) {
+    status.text = "$(sync~spin) Code Reading";
+    status.tooltip = "Writing explanations for the code in view. Click to turn explanations off.";
+  } else {
+    status.text = "$(eye) Code Reading";
+    status.tooltip = "Explanations are on. Click to turn them off.";
+  }
+  status.show();
+}
 
 const styles: Record<Style, vscode.TextEditorDecorationType> = {} as Record<
   Style,
@@ -103,6 +133,9 @@ function renderAll(): void {
 const viewTimers = new Map<string, NodeJS.Timeout>();
 
 function reportView(editor: vscode.TextEditor): void {
+  // Off means no model calls unless asked: the server reads only what it
+  // is told is in view.
+  if (!enabled) return;
   const key = editor.document.uri.toString();
   clearTimeout(viewTimers.get(key));
   viewTimers.set(
@@ -208,8 +241,25 @@ async function showScenario(): Promise<void> {
   await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true });
 }
 
+/**
+ * Opens crt's configuration file: the endpoint, model, key and output
+ * language every editor shares. The server writes a commented example when
+ * there is none; changes apply on the next read.
+ */
+async function openConfig(): Promise<void> {
+  if (!client) return;
+  const result = await client.sendRequest<ConfigPathResult>(CONFIG_PATH);
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(result.path));
+  await vscode.window.showTextDocument(doc);
+  if (result.created) {
+    void vscode.window.showInformationMessage("Code Reading: wrote an example configuration; edit it to choose a model.");
+  }
+}
+
 /** For tests: what this extension last rendered for a document. */
 export interface TestApi {
+  /** The status bar item's text. */
+  statusText(): string | undefined;
   annotationsFor(uri: string): Annotation[];
   /** True once notes still being written were received for `uri`. */
   sawPartial(uri: string): boolean;
@@ -218,6 +268,10 @@ export interface TestApi {
 
 export async function activate(context: vscode.ExtensionContext): Promise<TestApi> {
   makeStyles();
+  enabled = readEnabled();
+  status = vscode.window.createStatusBarItem("codeReading.status", vscode.StatusBarAlignment.Right, 100);
+  status.name = "Code Reading";
+  status.command = "codeReading.toggle";
   const settings = vscode.workspace.getConfiguration("codeReading");
   const args = ["lsp"];
   const configPath = settings.get<string>("configPath");
@@ -242,6 +296,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
     for (const editor of vscode.window.visibleTextEditors) {
       if (editor.document.uri.toString() === params.uri) render(editor);
     }
+    updateStatus();
     for (let i = waiters.length - 1; i >= 0; i--) {
       const w = waiters[i]!;
       if (w.uri === params.uri && w.done(params)) waiters.splice(i, 1);
@@ -265,19 +320,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
     vscode.commands.registerCommand("codeReading.read", () => read(false)),
     vscode.commands.registerCommand("codeReading.refresh", () => read(true)),
     vscode.commands.registerCommand("codeReading.showScenario", showScenario),
-    vscode.commands.registerCommand("codeReading.toggle", () => {
-      enabled = !enabled;
+    vscode.commands.registerCommand("codeReading.openConfig", openConfig),
+    // Kept in the user's settings, so the choice survives a restart.
+    vscode.commands.registerCommand("codeReading.toggle", () =>
+      vscode.workspace
+        .getConfiguration("codeReading")
+        .update("enabled", !enabled, vscode.ConfigurationTarget.Global),
+    ),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration("codeReading.enabled")) return;
+      enabled = readEnabled();
       renderAll();
+      updateStatus();
+      if (enabled) for (const editor of vscode.window.visibleTextEditors) reportView(editor);
     }),
+    vscode.window.onDidChangeActiveTextEditor(() => updateStatus()),
+    status,
     ...Object.values(styles),
     stepStyle,
   );
 
   await client.start();
   for (const e of vscode.window.visibleTextEditors) reportView(e);
+  updateStatus();
 
   return {
     sawPartial: (uri) => partialSeen.has(uri),
+    statusText: () => status?.text,
     annotationsFor: (uri) => {
       const p = latest.get(uri);
       return p ? annotations(p) : [];

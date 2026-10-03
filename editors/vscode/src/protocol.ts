@@ -92,4 +92,10 @@ export interface FunctionReadingDto {
 export const FILE_READINGS = "codeReading/fileReadings";
 export const READ = "codeReading/read";
 export const SCENARIOS = "codeReading/scenarios";
+export const CONFIG_PATH = "codeReading/configPath";
+
+export interface ConfigPathResult {
+  path: string;
+  created: boolean;
+}
 export const VISIBLE_RANGE = "codeReading/visibleRange";

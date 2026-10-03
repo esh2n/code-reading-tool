@@ -15,6 +15,9 @@
 //! - `codeReading/scenarios` (request, [`ReadParams`] → [`FunctionReadingDto`]):
 //!   the same reading with its scenarios, asking the model for them if not
 //!   cached. `refresh` rewrites the scenarios only.
+//! - `codeReading/configPath` (request, no params → [`ConfigPathResult`]):
+//!   where the configuration file is, creating it with a commented example
+//!   when it does not exist, so editors can open it.
 //! - `codeReading/visibleRange` (notification, [`VisibleRangeParams`]):
 //!   which lines the user can see; the server reads uncached functions there
 //!   when auto-read is on.
@@ -28,6 +31,7 @@ use crate::{FileAnalysisDto, NoteDto, ReadingDto};
 pub const FILE_READINGS: &str = "codeReading/fileReadings";
 pub const READ: &str = "codeReading/read";
 pub const SCENARIOS: &str = "codeReading/scenarios";
+pub const CONFIG_PATH: &str = "codeReading/configPath";
 pub const VISIBLE_RANGE: &str = "codeReading/visibleRange";
 
 /// A document's functions with their cached readings.
@@ -67,6 +71,16 @@ pub struct ReadParams {
     /// Ignore the cache and ask the model again.
     #[serde(default)]
     pub refresh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigPathResult {
+    /// Absolute path of the configuration file.
+    pub path: String,
+    /// True when the file did not exist and was just written from the
+    /// example.
+    pub created: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
