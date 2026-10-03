@@ -219,6 +219,25 @@ struct AnswerStep {
     what: String,
 }
 
+/// Some models HTML-escape inside JSON strings (`&amp;str` for `&str`).
+/// The text is shown in editors and HTML that escape for themselves, so the
+/// entities are turned back into characters here.
+fn unescape(text: String) -> String {
+    if !text.contains('&') {
+        return text;
+    }
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&")
+}
+
+fn unescape_all(v: Vec<String>) -> Vec<String> {
+    v.into_iter().map(unescape).collect()
+}
+
 /// Parses the model's JSON into a draft. A "fact" without a call name is
 /// treated as an inference; the domain checker verifies the rest.
 pub(crate) fn parse(content: &str) -> Result<Draft, String> {
@@ -229,9 +248,9 @@ pub(crate) fn parse(content: &str) -> Result<Draft, String> {
             .into_iter()
             .map(|n| Note {
                 line: n.line,
-                text: n.text,
-                detail: Some(n.detail).filter(|d| !d.trim().is_empty()),
-                assumptions: n.assumptions,
+                text: unescape(n.text),
+                detail: Some(unescape(n.detail)).filter(|d| !d.trim().is_empty()),
+                assumptions: unescape_all(n.assumptions),
                 basis: match (n.basis.kind, n.basis.call) {
                     (AnswerBasisKind::Fact, Some(name)) if !name.is_empty() => {
                         Basis::Fact(FactRef::Call { name })
@@ -249,18 +268,18 @@ pub(crate) fn parse(content: &str) -> Result<Draft, String> {
                     AnswerScenarioKind::Boundary => ScenarioKind::Boundary,
                     AnswerScenarioKind::Concurrent => ScenarioKind::Concurrent,
                 },
-                title: s.title,
-                input: s.input,
+                title: unescape(s.title),
+                input: unescape(s.input),
                 steps: s
                     .steps
                     .into_iter()
                     .map(|st| Step {
                         line: st.line,
-                        what: st.what,
+                        what: unescape(st.what),
                     })
                     .collect(),
-                outcome: s.outcome,
-                assumptions: s.assumptions,
+                outcome: unescape(s.outcome),
+                assumptions: unescape_all(s.assumptions),
             })
             .collect(),
     })
@@ -296,6 +315,19 @@ mod tests {
         assert_eq!(draft.notes[1].basis, Basis::Inference);
         assert_eq!(draft.notes[1].detail.as_deref(), Some("long"));
         assert_eq!(draft.scenarios[0].kind, ScenarioKind::Boundary);
+    }
+
+    #[test]
+    fn html_entities_from_the_model_become_characters() {
+        let content = r#"{"notes":[{"line":1,"text":"takes &amp;str","detail":"a &lt; b &amp;&amp; c","assumptions":["x &gt; 0"],"basis":{"kind":"inference","call":null}}],
+          "scenarios":[{"kind":"normal","title":"&quot;a&quot;","input":"&#39;x&#39;","steps":[{"line":1,"what":"&amp;mut"}],"outcome":"ok","assumptions":[]}]}"#;
+        let d = parse(content).unwrap();
+        assert_eq!(d.notes[0].text, "takes &str");
+        assert_eq!(d.notes[0].detail.as_deref(), Some("a < b && c"));
+        assert_eq!(d.notes[0].assumptions[0], "x > 0");
+        assert_eq!(d.scenarios[0].title, "\"a\"");
+        assert_eq!(d.scenarios[0].input, "'x'");
+        assert_eq!(d.scenarios[0].steps[0].what, "&mut");
     }
 
     #[test]
