@@ -78,6 +78,7 @@ fn config(url: &str, fallback: Option<&str>) -> LlmConfig {
             .unwrap_or_default(),
         output_language: "Japanese".into(),
         timeout_secs: 10,
+        extra_body: serde_json::Map::new(),
     }
 }
 
@@ -292,4 +293,24 @@ fn an_unreachable_endpoint_reports_the_underlying_cause() {
         .unwrap_err();
     let msg = err.to_string().to_ascii_lowercase();
     assert!(msg.contains("connect") || msg.contains("refused"), "{msg}");
+}
+
+#[test]
+fn extra_body_is_sent_but_never_overrides_the_core_fields() {
+    let s = serve(vec![(200, completion(GOOD))]);
+    let mut c = config(&s.url, None);
+    c.extra_body.insert(
+        "chat_template_kwargs".into(),
+        json!({ "enable_thinking": false }),
+    );
+    c.extra_body.insert("model".into(), json!("sneaky"));
+    c.extra_body
+        .insert("response_format".into(), json!({ "type": "text" }));
+    let llm = OpenAiCompatible::new(c).unwrap();
+    assert!(llm.authors()[0].prompt.starts_with("v1-japanese-x"));
+    llm.explain(&request()).unwrap();
+    let body = &s.seen.lock().unwrap()[0];
+    assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+    assert_eq!(body["model"], "primary-model");
+    assert_eq!(body["response_format"]["type"], "json_schema");
 }

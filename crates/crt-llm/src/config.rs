@@ -31,6 +31,12 @@ pub struct LlmConfig {
     /// Seconds to wait for one response.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Extra fields merged into every request body, for endpoint-specific
+    /// options (for example turning a model's thinking mode off). They
+    /// never replace `model`, `messages` or `response_format`. Part of the
+    /// cache key: different options make a different reading.
+    #[serde(default)]
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
 }
 
 fn default_output_language() -> String {

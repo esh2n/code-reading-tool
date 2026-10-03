@@ -10,14 +10,27 @@ use crt_domain::{Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Step, Symb
 
 pub(crate) const VERSION: u32 = 1;
 
-/// The cache-key form of the prompt: version plus output language.
-pub(crate) fn identity(output_language: &str) -> String {
+/// The cache-key form of the prompt: version, output language and, when
+/// extra request fields are set, a short digest of them (they change the
+/// answer, e.g. a model's thinking mode).
+pub(crate) fn identity(
+    output_language: &str,
+    extra_body: &serde_json::Map<String, Value>,
+) -> String {
     let lang: String = output_language
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_lowercase();
-    format!("v{VERSION}-{lang}")
+    if extra_body.is_empty() {
+        return format!("v{VERSION}-{lang}");
+    }
+    // serde_json maps are ordered by key, so this text is stable.
+    let text = Value::Object(extra_body.clone()).to_string();
+    let digest = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    format!("v{VERSION}-{lang}-x{:08x}", digest >> 32)
 }
 
 pub(crate) fn system(output_language: &str) -> String {
@@ -291,8 +304,23 @@ mod tests {
 
     #[test]
     fn identity_folds_the_output_language_into_a_safe_token() {
-        assert_eq!(identity("Japanese"), "v1-japanese");
-        assert_eq!(identity("pt-BR"), "v1-ptbr");
+        let none = serde_json::Map::new();
+        assert_eq!(identity("Japanese", &none), "v1-japanese");
+        assert_eq!(identity("pt-BR", &none), "v1-ptbr");
+        let mut off = serde_json::Map::new();
+        off.insert(
+            "chat_template_kwargs".into(),
+            serde_json::json!({ "enable_thinking": false }),
+        );
+        let mut on = serde_json::Map::new();
+        on.insert(
+            "chat_template_kwargs".into(),
+            serde_json::json!({ "enable_thinking": true }),
+        );
+        let (a, b) = (identity("Japanese", &off), identity("Japanese", &on));
+        assert!(a.starts_with("v1-japanese-x"), "{a}");
+        assert_ne!(a, b, "different request options are different readings");
+        assert_eq!(a, identity("Japanese", &off), "stable");
     }
 
     #[test]

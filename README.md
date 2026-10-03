@@ -50,6 +50,16 @@ base_url = "https://another.example/v1"
 model = "another-model"
 ```
 
+Endpoint-specific request options go in `[llm.extra_body]`; they are merged
+into every request (never over `model`, `messages` or `response_format`) and
+are part of the cache key. For example, to turn off a Qwen3 model's thinking
+mode on a server that honours chat-template arguments:
+
+```toml
+[llm.extra_body]
+chat_template_kwargs = { enable_thinking = false }
+```
+
 The endpoint must support structured output (`response_format` with a JSON
 Schema); `crt` refuses to fall back to free-form text.
 
@@ -87,6 +97,9 @@ the release's SHA-256), or put `crt` on your `PATH`.
 | `:CrRead[!]` | explain the function under the cursor now (`!` asks the model again) |
 | `:CrScenario` | pick a scenario and see its steps beside the code; `<CR>` jumps to a step |
 | `:CrToggle` | hide or show the annotations |
+
+A local model that serves one request at a time gains nothing from parallel
+reads: pass `max_parallel = 1` to `setup()`.
 | diagnostics | concurrency scenarios, with the lines that interleave as related locations |
 
 ### VS Code

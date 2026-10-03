@@ -20,6 +20,7 @@ const MALFORMED_RETRIES: usize = 2;
 
 pub struct OpenAiCompatible {
     output_language: String,
+    extra_body: serde_json::Map<String, Value>,
     endpoints: Vec<EndpointConfig>,
     http: Client,
 }
@@ -38,6 +39,7 @@ impl OpenAiCompatible {
             .map_err(|e| ExplainError::Config(chain(&e)))?;
         Ok(Self {
             output_language: config.output_language,
+            extra_body: config.extra_body,
             endpoints,
             http,
         })
@@ -46,7 +48,7 @@ impl OpenAiCompatible {
     fn author_for(&self, endpoint: &EndpointConfig) -> Author {
         Author {
             model: endpoint.model.clone(),
-            prompt: prompt::identity(&self.output_language),
+            prompt: prompt::identity(&self.output_language, &self.extra_body),
         }
     }
 }
@@ -140,7 +142,11 @@ impl Explainer for OpenAiCompatible {
 
 impl OpenAiCompatible {
     fn body(&self, request: &ExplainRequest, model: &str) -> Value {
-        json!({
+        let mut body = serde_json::Map::new();
+        for (k, v) in &self.extra_body {
+            body.insert(k.clone(), v.clone());
+        }
+        let core = json!({
             "model": model,
             "messages": [
                 { "role": "system", "content": prompt::system(&self.output_language) },
@@ -150,7 +156,12 @@ impl OpenAiCompatible {
                 "type": "json_schema",
                 "json_schema": { "name": "function_reading", "strict": true, "schema": prompt::schema() }
             }
-        })
+        });
+        // The core fields win over anything in extra_body.
+        if let Value::Object(core) = core {
+            body.extend(core);
+        }
+        Value::Object(body)
     }
 
     fn attempt(&self, endpoint: &EndpointConfig, body: &Value) -> Attempt {
