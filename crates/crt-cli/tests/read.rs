@@ -124,6 +124,24 @@ fn reads_checks_caches_and_lists() {
     assert_eq!(names, vec!["Copy", "helper"]);
     assert!(listed["readings"][0].is_object());
     assert!(listed["readings"][1].is_null());
+
+    // HTML from the cache only: the server is gone, so nothing is asked.
+    let out = dir.path().join("p.html");
+    Command::cargo_bin("crt")
+        .unwrap()
+        .args(["render", file, "--out"])
+        .arg(&out)
+        .arg("--config")
+        .arg(dir.path().join("config.toml"))
+        .arg("--cache-dir")
+        .arg(dir.path().join("cache"))
+        .assert()
+        .success();
+    let html = fs::read_to_string(out).unwrap();
+    assert!(html.contains("method C.Copy"));
+    assert!(html.contains(r#"<span class="n fact">calls helper</span>"#));
+    assert!(html.contains("nil receiver"));
+    assert!(html.contains("Run <code>crt read --line 9</code>"));
 }
 
 #[test]

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: #f7f7f4; --surface: #ffffff; --fg: #1f2421; --muted: #5d665f; --line: #dcdfd9;
+  --fact: #1d6b45; --fact-bg: #e3f2e9; --guess: #6b5a2e; --guess-bg: #f6efdc; --call: #6a7470;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --body: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141716; --surface: #1b1f1d; --fg: #e3e8e4; --muted: #9aa59e; --line: #2c3430;
+    --fact: #8fd3ad; --fact-bg: #1f3329; --guess: #e2c98c; --guess-bg: #3a3220; --call: #8b958f; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body); line-height: 1.6; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+h1 { font-size: 1.5rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: .9rem; margin: 0 0 24px; }
+.warn { background: var(--guess-bg); color: var(--guess); padding: 8px 12px; border-radius: 6px; margin: 0 0 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: .85rem; color: var(--muted); margin: 0 0 20px; }
+.tag { font-family: var(--mono); font-size: .75rem; padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+.tag.fact { background: var(--fact-bg); color: var(--fact); }
+.tag.guess { background: var(--guess-bg); color: var(--guess); }
+section.fn { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 0 0 28px; overflow: hidden; }
+section.fn > header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+section.fn > header h2 { font-size: 1.05rem; margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+section.fn > header p { margin: 2px 0 0; color: var(--muted); font-size: .85rem; }
+.code { overflow-x: auto; }
+table.src { border-collapse: collapse; font-family: var(--mono); font-size: .85rem; width: 100%; }
+table.src td { padding: 1px 12px; vertical-align: top; }
+td.no { color: var(--muted); text-align: right; user-select: none; width: 1%; white-space: nowrap; }
+td.text { white-space: pre; }
+td.note { font-family: var(--body); font-size: .85rem; min-width: 18rem; }
+.n { display: block; }
+.n.fact { color: var(--fact); }
+.n.guess { color: var(--guess); font-style: italic; }
+.n.call { color: var(--call); }
+details { margin: 2px 0 4px; }
+details summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
+.scenarios { padding: 12px 16px 16px; border-top: 1px solid var(--line); display: grid; gap: 12px; }
+.sc h3 { font-size: .95rem; margin: 0; }
+.sc ol { margin: 4px 0; padding-left: 1.4em; }
+.sc .lno { font-family: var(--mono); color: var(--muted); }
+.empty { color: var(--muted); padding: 12px 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ title }}</h1>
+  <p class="meta">{{ language }} · {{ functions|length }} function(s){% if models %} · written by {{ models|join(", ") }}{% endif %}</p>
+  {% if has_syntax_error %}<p class="warn">The file has syntax errors; some functions may be missing.</p>{% endif %}
+  <div class="legend">
+    <span><span class="tag fact">fact</span> read off the syntax tree</span>
+    <span><span class="tag guess">guess</span> the model's reasoning, not executed; check the assumptions</span>
+  </div>
+  {% for f in functions %}
+  <section class="fn" id="{{ f.anchor }}">
+    <header>
+      <h2>{{ f.kind }} {% if f.enclosing %}{{ f.enclosing }}.{% endif %}{{ f.name }}</h2>
+      <p>lines {{ f.start_line }}–{{ f.end_line }}{% if f.checked %} · {{ f.checked }}{% endif %}</p>
+    </header>
+    <div class="code"><table class="src">
+      {% for row in f.rows %}
+      <tr>
+        <td class="no">{{ row.line }}</td>
+        <td class="text">{{ row.text }}</td>
+        <td class="note">
+          {% for n in row.notes %}
+          <span class="n {{ n.style }}">{{ n.text }}</span>
+          {% if n.detail or n.assumptions %}<details><summary>more</summary>{% if n.detail %}<p>{{ n.detail }}</p>{% endif %}{% if n.assumptions %}<p>Assumes: {{ n.assumptions|join("; ") }}</p>{% endif %}</details>{% endif %}
+          {% endfor %}
+          {% if row.calls %}<span class="n call">→ {{ row.calls|join(", ") }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% if f.scenarios %}
+    <div class="scenarios">
+      {% for s in f.scenarios %}
+      <div class="sc">
+        <h3><span class="tag guess">{{ s.kind }}</span> {{ s.title }}</h3>
+        <p>Input: {{ s.input }}</p>
+        <ol>{% for st in s.steps %}<li><span class="lno">L{{ st.line }}</span> {{ st.what }}</li>{% endfor %}</ol>
+        <p>Outcome: {{ s.outcome }}</p>
+        {% if s.assumptions %}<p>Assumes: {{ s.assumptions|join("; ") }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% elif not f.read %}
+    <p class="empty">Not explained yet. Run <code>crt read --line {{ f.start_line }}</code>.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+</main>
+</body>
+</html>
