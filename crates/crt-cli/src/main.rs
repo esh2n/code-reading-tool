@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use crt_app::{FunctionSelector, ReadOptions, Readers};
+use crt_domain::Note;
 use crt_llm::OpenAiCompatible;
 use crt_store::FileStore;
 use crt_treesitter::TreeSitterSource;
@@ -31,6 +32,32 @@ struct Locations {
     cache_dir: Option<PathBuf>,
 }
 
+/// Which function to read, and whether to skip the cache.
+#[derive(clap::Args)]
+struct Target {
+    file: PathBuf,
+    /// The function with this name.
+    #[arg(long, conflicts_with = "line", required_unless_present = "line")]
+    func: Option<String>,
+    /// The innermost function containing this 1-based line.
+    #[arg(long)]
+    line: Option<usize>,
+    /// Ignore the cache and ask the model again (for scenarios: rewrite
+    /// the scenarios only).
+    #[arg(long)]
+    refresh: bool,
+}
+
+impl Target {
+    fn selector(&self) -> FunctionSelector {
+        match (&self.func, self.line) {
+            (Some(name), _) => FunctionSelector::Name(name.clone()),
+            (None, Some(line)) => FunctionSelector::Line(line),
+            (None, None) => unreachable!("clap requires --func or --line"),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print the structural facts of every function in a file as JSON.
@@ -41,18 +68,21 @@ enum Command {
         #[arg(long)]
         func: Option<String>,
     },
-    /// Explain one function: per-line notes and behaviour scenarios.
+    /// Explain one function's lines: per-line notes.
     Read {
-        file: PathBuf,
-        /// The function with this name.
-        #[arg(long, conflicts_with = "line", required_unless_present = "line")]
-        func: Option<String>,
-        /// The innermost function containing this 1-based line.
+        #[command(flatten)]
+        target: Target,
+        /// Print each note to stderr as soon as it arrives.
         #[arg(long)]
-        line: Option<usize>,
-        /// Ignore the cache and ask the model again.
-        #[arg(long)]
-        refresh: bool,
+        progress: bool,
+        #[command(flatten)]
+        at: Locations,
+    },
+    /// Walk one function through normal, boundary and concurrent inputs.
+    /// Reads the notes first if they are not cached.
+    Scenarios {
+        #[command(flatten)]
+        target: Target,
         #[command(flatten)]
         at: Locations,
     },
@@ -64,13 +94,14 @@ enum Command {
         at: Locations,
     },
     /// Write one HTML page with the file's readings. Uses the cache; with
-    /// --read-missing, explains uncached functions first.
+    /// --read-missing, writes missing notes and scenarios first.
     Render {
         file: PathBuf,
         /// Output file (default: stdout).
         #[arg(long)]
         out: Option<PathBuf>,
-        /// Explain functions that have no cached reading before rendering.
+        /// Write notes and scenarios for functions missing them before
+        /// rendering.
         #[arg(long)]
         read_missing: bool,
         #[command(flatten)]
@@ -89,19 +120,11 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Analyze { file, func } => analyze(&file, func.as_deref()),
         Command::Read {
-            file,
-            func,
-            line,
-            refresh,
+            target,
+            progress,
             at,
-        } => {
-            let selector = match (func, line) {
-                (Some(name), _) => FunctionSelector::Name(name),
-                (None, Some(line)) => FunctionSelector::Line(line),
-                (None, None) => unreachable!("clap requires --func or --line"),
-            };
-            read(&file, &selector, refresh, &at)
-        }
+        } => read(&target, Part::Notes { progress }, &at),
+        Command::Scenarios { target, at } => read(&target, Part::Scenarios, &at),
         Command::Cached { file, at } => cached(&file, &at),
         Command::Lsp { at } => lsp(&at),
         Command::Render {
@@ -155,7 +178,14 @@ fn explainer(at: &Locations) -> Result<OpenAiCompatible> {
     OpenAiCompatible::new(llm).context("setting up the LLM client")
 }
 
-fn read(file: &Path, selector: &FunctionSelector, refresh: bool, at: &Locations) -> Result<()> {
+/// What `read` asks for.
+enum Part {
+    Notes { progress: bool },
+    Scenarios,
+}
+
+fn read(target: &Target, part: Part, at: &Locations) -> Result<()> {
+    let file = target.file.as_path();
     let source = read_source(file)?;
     let explainer = explainer(at)?;
     let store = FileStore::new(config::cache_dir(at.cache_dir.as_deref())?);
@@ -165,11 +195,43 @@ fn read(file: &Path, selector: &FunctionSelector, refresh: bool, at: &Locations)
         store: &store,
     };
     let options = ReadOptions {
-        refresh,
+        refresh: target.refresh,
         ..ReadOptions::default()
     };
-    let result = crt_app::read_function(&readers, file, &source, selector, options)
-        .with_context(|| format!("reading {}", file.display()))?;
+    let selector = target.selector();
+    let result = match part {
+        Part::Notes { progress } => {
+            let started = std::time::Instant::now();
+            let mut shown = 0;
+            let mut on_progress = |notes: &[Note]| {
+                if !progress {
+                    return;
+                }
+                if notes.len() < shown {
+                    eprintln!("({:.1}s) starting over", started.elapsed().as_secs_f32());
+                }
+                for n in notes.iter().skip(shown) {
+                    eprintln!(
+                        "({:.1}s) line {}: {}",
+                        started.elapsed().as_secs_f32(),
+                        n.line,
+                        n.text
+                    );
+                }
+                shown = notes.len();
+            };
+            crt_app::read_function(
+                &readers,
+                file,
+                &source,
+                &selector,
+                options,
+                &mut on_progress,
+            )
+        }
+        Part::Scenarios => crt_app::read_scenarios(&readers, file, &source, &selector, options),
+    }
+    .with_context(|| format!("reading {}", file.display()))?;
     for w in &result.warnings {
         eprintln!("warning: {w}");
     }
@@ -246,12 +308,17 @@ fn render(file: &Path, out: Option<&Path>, read_missing: bool, at: &Locations) -
             store: &store,
         };
         for (function, reading) in analysis.functions.iter().zip(readings.iter_mut()) {
-            if reading.is_some() {
+            if reading.as_ref().is_some_and(|r| r.scenarios.is_some()) {
                 continue;
             }
             let selector = FunctionSelector::Line(function.span.start_line);
-            match crt_app::read_function(&readers, file, &source, &selector, ReadOptions::default())
-            {
+            match crt_app::read_scenarios(
+                &readers,
+                file,
+                &source,
+                &selector,
+                ReadOptions::default(),
+            ) {
                 Ok(r) => {
                     for w in &r.warnings {
                         eprintln!("warning: {w}");

@@ -42,9 +42,10 @@ pub(crate) fn hover(function: &Function, reading: Option<&Reading>, line: usize)
             }
             parts.push(s);
         }
-        if line == function.span.start_line && !r.scenarios.is_empty() {
+        let scenarios = r.scenarios.as_deref().unwrap_or_default();
+        if line == function.span.start_line && !scenarios.is_empty() {
             let mut s = String::from("**Scenarios** _(guesses)_");
-            for sc in &r.scenarios {
+            for sc in scenarios {
                 s.push_str(&format!(
                     "\n- {}: {} → {}",
                     kind_name(sc.kind),
@@ -83,6 +84,7 @@ pub(crate) fn diagnostics(uri: &Uri, reading: &Reading) -> Vec<Diagnostic> {
     reading
         .scenarios
         .iter()
+        .flatten()
         .filter(|s| s.kind == ScenarioKind::Concurrent)
         .filter_map(|s| {
             let (first, rest) = s.steps.split_first()?;
@@ -203,7 +205,7 @@ mod tests {
                     basis: Basis::Inference,
                 },
             ],
-            scenarios: vec![Scenario {
+            scenarios: Some(vec![Scenario {
                 kind: ScenarioKind::Concurrent,
                 title: "two writers".into(),
                 input: "two calls".into(),
@@ -219,7 +221,7 @@ mod tests {
                 ],
                 outcome: "lost update".into(),
                 assumptions: vec![],
-            }],
+            }]),
             check: CheckReport::default(),
         }
     }

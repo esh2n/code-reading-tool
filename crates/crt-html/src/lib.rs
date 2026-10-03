@@ -150,7 +150,7 @@ fn view<'a>(
         read: reading.is_some(),
         checked,
         rows,
-        scenarios: reading.map(|r| r.scenarios.as_slice()).unwrap_or(&[]),
+        scenarios: reading.and_then(|r| r.scenarios.as_deref()).unwrap_or(&[]),
     }
 }
 

@@ -26,8 +26,16 @@ export async function run(): Promise<void> {
   const api = await ext.activate();
   const uri = doc.uri.toString();
 
-  // Opening shows structural facts; viewing reads both functions.
+  // Opening shows structural facts; viewing reads both functions. The
+  // notes of Inc are shown while they arrive, one at a time.
+  const partial = await until(
+    () => (api.sawPartial(uri) ? true : undefined),
+    30000,
+    "notes shown while they arrive",
+  );
+  assert.ok(partial);
   const params = await api.waitForReadings(uri, 30000);
+  assert.equal(params.readings[0]?.scenarios, null, "scenarios wait to be asked for");
   assert.deepEqual(
     params.analysis.functions.map((f) => [f.name, f.enclosing]),
     [
@@ -37,6 +45,7 @@ export async function run(): Promise<void> {
   );
   const lines = api.annotationsFor(uri).map((a) => [a.line, a.style, a.text]);
   assert.deepEqual(lines, [
+    [5, "guess", "◌ increments c.n"],
     [6, "fact", "● calls add"],
     [9, "guess", "◌ returns the sum"],
   ]);
@@ -53,17 +62,8 @@ export async function run(): Promise<void> {
     .join("\n");
   assert.match(md, /\*\*calls add\*\* _\(fact\)_/);
 
-  // The concurrent scenario is a diagnostic linking its steps.
-  const diag = await until(
-    () => vscode.languages.getDiagnostics(doc.uri)[0],
-    10000,
-    "the concurrency diagnostic",
-  );
-  assert.equal(diag.range.start.line, 5);
-  assert.match(diag.message, /two Inc at once/);
-  assert.equal(diag.relatedInformation?.[0]?.location.range.start.line, 6);
-
-  // The scenario view opens beside the source.
+  // The first request for scenarios writes them; the view opens beside
+  // the source.
   const quickPick = vscode.window.showQuickPick;
   (vscode.window as { showQuickPick: unknown }).showQuickPick = async (items: readonly unknown[]) => items[0];
   try {
@@ -82,6 +82,16 @@ export async function run(): Promise<void> {
   assert.match(text, /two Inc at once \(concurrent\)/);
   assert.match(text, /L6 {4}both read c\.n/);
   assert.match(text, /outcome: one increment is lost/);
+
+  // The concurrent scenario is a diagnostic linking its steps.
+  const diag = await until(
+    () => vscode.languages.getDiagnostics(doc.uri)[0],
+    10000,
+    "the concurrency diagnostic",
+  );
+  assert.equal(diag.range.start.line, 5);
+  assert.match(diag.message, /two Inc at once/);
+  assert.equal(diag.relatedInformation?.[0]?.location.range.start.line, 6);
 
   // An explicit read is served from the cache.
   await vscode.window.showTextDocument(doc);

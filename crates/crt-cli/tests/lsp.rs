@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
@@ -11,59 +10,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-const SOURCE: &str = "package p\n\ntype C struct{ n int }\n\nfunc (c *C) Inc() {\n\tc.n = add(c.n, 1)\n}\n\nfunc add(a, b int) int { return a + b }\n";
-
-fn answer_for(user: &str) -> String {
-    let content = if user.contains("FUNCTION: Inc") {
-        json!({
-            "notes": [
-                { "line": 6, "text": "calls add", "detail": "adds one", "assumptions": [],
-                  "basis": { "kind": "fact", "call": "add" } }
-            ],
-            "scenarios": [
-                { "kind": "concurrent", "title": "two Inc at once", "input": "two goroutines",
-                  "steps": [ { "line": 6, "what": "both read c.n" }, { "line": 6, "what": "both write" } ],
-                  "outcome": "one increment is lost", "assumptions": ["no lock around Inc"] }
-            ]
-        })
-    } else {
-        json!({ "notes": [ { "line": 9, "text": "returns the sum", "detail": "", "assumptions": [],
-                  "basis": { "kind": "inference", "call": null } } ], "scenarios": [] })
-    };
-    json!({ "choices": [{ "finish_reason": "stop", "message": { "content": content.to_string() } }] }).to_string()
-}
-
-/// Answers every request by looking at which function it is about.
-fn serve_llm() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/v1", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut len = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                    break;
-                }
-                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap();
-                }
-            }
-            let mut buf = vec![0; len];
-            reader.read_exact(&mut buf).unwrap();
-            let req: Value = serde_json::from_slice(&buf).unwrap();
-            let body = answer_for(req["messages"][1]["content"].as_str().unwrap());
-            let reply = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(reply.as_bytes()).unwrap();
-        }
-    });
-    url
-}
+mod common;
+use common::{SOURCE, serve_llm};
 
 struct Lsp {
     child: Child,
@@ -147,6 +95,9 @@ impl Lsp {
                 .incoming
                 .recv_timeout(Duration::from_secs(20))
                 .expect("timed out waiting for the server");
+            if std::env::var_os("CRT_TEST_TRACE").is_some() {
+                eprintln!("<- {msg}");
+            }
             if msg.get("method").is_some() && msg.get("id").is_some() {
                 let id = msg["id"].clone();
                 self.send(json!({ "jsonrpc": "2.0", "id": id, "result": null }));
@@ -191,7 +142,7 @@ fn facts_on_open_readings_on_view_hover_diagnostics_and_cache() {
     assert_eq!(init["capabilities"]["hoverProvider"], true);
     assert_eq!(
         init["capabilities"]["experimental"]["codeReading"]["version"],
-        1
+        2
     );
     lsp.notify("initialized", json!({}));
 
@@ -211,31 +162,63 @@ fn facts_on_open_readings_on_view_hover_diagnostics_and_cache() {
     assert_eq!(opened["analysis"]["functions"][0]["enclosing"], "C");
     assert_eq!(opened["readings"], json!([null, null]));
 
-    // Viewing the file reads the visible functions and pushes the results.
+    // Viewing the file reads the visible functions. Notes are pushed while
+    // they arrive, then the finished readings.
     lsp.notify(
         "codeReading/visibleRange",
         json!({ "uri": uri, "startLine": 0, "endLine": 20 }),
     );
+    let partial = lsp.wait(|m| {
+        file_readings(m)
+            && m["params"]["partial"].as_array().is_some_and(|p| {
+                p.iter()
+                    .any(|x| x["notes"].as_array().is_some_and(|n| n.len() == 1))
+            })
+    })["params"]
+        .clone();
+    let first = partial["partial"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["notes"].as_array().is_some_and(|n| n.len() == 1))
+        .unwrap();
+    assert_eq!(
+        first["functionHash"],
+        opened["analysis"]["functions"][0]["hash"]
+    );
+    assert_eq!(first["notes"][0]["text"], "increments c.n");
     let done = lsp.wait(|m| {
         file_readings(m)
             && m["params"]["readings"]
                 .as_array()
                 .is_some_and(|r| r.iter().all(|x| !x.is_null()))
     });
+    assert_eq!(done["params"]["partial"], json!([]));
     let inc = &done["params"]["readings"][0];
     assert_eq!(
-        inc["notes"][0]["basis"],
+        inc["notes"][1]["basis"],
         json!({ "kind": "fact", "call": "add" })
     );
-    assert_eq!(inc["scenarios"][0]["kind"], "concurrent");
+    assert!(inc["scenarios"].is_null(), "scenarios wait to be asked for");
 
-    // The concurrent scenario became a diagnostic linking its steps.
+    // Asking for scenarios writes them and keeps them with the notes; the
+    // concurrent one becomes a diagnostic linking its steps. The server
+    // publishes before it replies.
+    let id = lsp.next_id;
+    lsp.next_id += 1;
+    lsp.send(
+        json!({ "jsonrpc": "2.0", "id": id, "method": "codeReading/scenarios",
+                     "params": { "uri": uri, "line": 4 } }),
+    );
     let diag = lsp.wait(|m| {
         m["method"] == "textDocument/publishDiagnostics"
             && m["params"]["diagnostics"]
                 .as_array()
                 .is_some_and(|d| !d.is_empty())
     });
+    let sc = lsp.wait(|m| m["id"] == id && m.get("method").is_none())["result"].clone();
+    assert_eq!(sc["reading"]["scenarios"][0]["kind"], "concurrent");
+    assert_eq!(sc["reading"]["notes"].as_array().unwrap().len(), 2);
     let d = &diag["params"]["diagnostics"][0];
     assert_eq!(d["range"]["start"]["line"], 5);
     assert!(

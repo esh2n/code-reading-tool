@@ -28,10 +28,17 @@ local state = require("code-reading.state")
 local render = require("code-reading.render")
 
 -- Structural facts arrive first, then the auto-read fills both readings.
+-- The notes of Inc arrive one at a time; the first is drawn on its own.
+local saw_partial = false
 check(vim.wait(10000, function()
   local s = state.get(buf)
   if not s then
     return false
+  end
+  for _, notes in pairs(s.partial) do
+    if #notes == 1 then
+      saw_partial = true
+    end
   end
   for i = 1, #s.params.analysis.functions do
     if not state.present(s.params.readings[i]) then
@@ -40,6 +47,8 @@ check(vim.wait(10000, function()
   end
   return true
 end, 50), "readings did not arrive")
+check(saw_partial, "notes were not shown while they arrived")
+check(not state.present(state.get(buf).params.readings[1].scenarios), "scenarios were written before being asked for")
 
 -- End-of-line annotations: a fact note on line 6.
 local marks = vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, { details = true })
@@ -64,14 +73,8 @@ local hover = client:request_sync("textDocument/hover", {
 }, 5000, buf)
 check(hover and hover.result and hover.result.contents.value:find("calls add", 1, true), "hover lacks the note")
 
--- The concurrent scenario arrives as a diagnostic with related info.
-check(vim.wait(5000, function()
-  return #vim.diagnostic.get(buf) > 0
-end, 50), "no diagnostics")
-local d = vim.diagnostic.get(buf)[1]
-check(d.lnum == 5 and d.message:find("two Inc at once", 1, true), "unexpected diagnostic: " .. vim.inspect(d))
-
--- Scenario view: choose the first scenario, see its steps, steps highlight the source.
+-- Scenario view: the first :CrScenario asks the server to write them,
+-- then lets the user choose one and shows its steps.
 -- Stand in for the user picking the first scenario.
 ---@diagnostic disable-next-line: duplicate-set-field
 vim.ui.select = function(items, _, on_choice)
@@ -79,14 +82,23 @@ vim.ui.select = function(items, _, on_choice)
 end
 vim.api.nvim_win_set_cursor(0, { 5, 0 })
 cr.scenario()
+check(vim.wait(10000, function()
+  return vim.api.nvim_get_current_buf() ~= buf
+end, 50), "scenario buffer did not open")
 local sbuf = vim.api.nvim_get_current_buf()
-check(sbuf ~= buf, "scenario buffer did not open")
 local rows = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
 check(rows[1]:find("two Inc at once", 1, true), "scenario title missing: " .. vim.inspect(rows))
 check(table.concat(rows, "\n"):find("L6    both read c.n", 1, true), "scenario step missing: " .. vim.inspect(rows))
 check(table.concat(rows, "\n"):find("outcome: one increment is lost", 1, true), "outcome missing")
 local step_marks = vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace("code-reading-scenario"), 0, -1, {})
 check(#step_marks == 2, "source lines of the scenario are not highlighted")
+
+-- The concurrent scenario arrives as a diagnostic with related info.
+check(vim.wait(5000, function()
+  return #vim.diagnostic.get(buf) > 0
+end, 50), "no diagnostics")
+local d = vim.diagnostic.get(buf)[1]
+check(d.lnum == 5 and d.message:find("two Inc at once", 1, true), "unexpected diagnostic: " .. vim.inspect(d))
 
 -- <CR> on a step jumps back to the source line.
 for i, r in ipairs(rows) do

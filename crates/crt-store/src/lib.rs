@@ -14,8 +14,8 @@ use crt_wire::ReadingDto;
 /// Version of the on-disk shape. Files with another version are ignored
 /// (and overwritten on the next read), never misread.
 /// 1: lines absolute in the file (never released). 2: lines relative to the
-/// function's first line.
-const FORMAT: u32 = 2;
+/// function's first line. 3: scenarios may be absent (`null`).
+const FORMAT: u32 = 3;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Stored {
@@ -127,7 +127,7 @@ mod tests {
                 prompt: "v1".into(),
             },
             notes: vec![],
-            scenarios: vec![],
+            scenarios: None,
             check: CheckReport::default(),
         }
     }

@@ -55,6 +55,7 @@ const params: FileReadingsParams = {
     null,
   ],
   pending: ["h2"],
+  partial: [],
 };
 
 test("notes win over call facts, guesses and facts are styled apart", () => {
@@ -66,6 +67,25 @@ test("notes win over call facts, guesses and facts are styled apart", () => {
       [7, "call", "→ log, x"],
       [8, "guess", "◌ returns"],
       [10, "pending", "⋯ reading"],
+    ],
+  );
+});
+
+test("notes still arriving stand in for the reading", () => {
+  const a = annotations({
+    ...params,
+    partial: [
+      {
+        functionHash: "h2",
+        notes: [{ line: 10, text: "adds", detail: null, assumptions: [], basis: { kind: "inference" } }],
+      },
+    ],
+  });
+  assert.deepEqual(
+    a.filter((x) => x.line === 10).map((x) => [x.style, x.text]),
+    [
+      ["guess", "◌ adds"],
+      ["pending", "⋯ reading"],
     ],
   );
 });

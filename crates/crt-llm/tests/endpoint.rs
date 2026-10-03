@@ -45,8 +45,13 @@ fn serve(responses: Vec<(u16, String)>) -> Script {
                 .lock()
                 .unwrap()
                 .push(serde_json::from_slice(&buf).unwrap());
+            let content_type = if body.starts_with("data:") {
+                "text/event-stream"
+            } else {
+                "application/json"
+            };
             let reply = format!(
-                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream.write_all(reply.as_bytes()).unwrap();
@@ -60,7 +65,26 @@ fn completion(content: &str) -> String {
         .to_string()
 }
 
-const GOOD: &str = r#"{"notes":[{"line":6,"text":"calls helper","detail":"","assumptions":[],"basis":{"kind":"fact","call":"helper"}}],"scenarios":[{"kind":"normal","title":"ok","input":"c","steps":[{"line":6,"what":"returns"}],"outcome":"copy","assumptions":[]}]}"#;
+/// The answer as server-sent events, cut into pieces of `size` characters.
+fn events(content: &str, size: usize) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    let mut out = String::new();
+    for piece in chars.chunks(size) {
+        let piece: String = piece.iter().collect();
+        let chunk =
+            json!({ "choices": [{ "delta": { "content": piece }, "finish_reason": null }] });
+        out.push_str(&format!("data: {chunk}\n\n"));
+    }
+    let end = json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] });
+    out.push_str(&format!("data: {end}\n\ndata: [DONE]\n\n"));
+    out
+}
+
+const GOOD: &str = r#"{"notes":[{"line":6,"text":"calls helper","detail":"","assumptions":[],"basis":{"kind":"fact","call":"helper"}}]}"#;
+
+const TWO_NOTES: &str = r#"{"notes":[{"line":5,"text":"copies c","detail":"","assumptions":[],"basis":{"kind":"inference","call":null}},{"line":6,"text":"calls helper","detail":"","assumptions":[],"basis":{"kind":"fact","call":"helper"}}]}"#;
+
+const SCENARIOS: &str = r#"{"scenarios":[{"kind":"normal","title":"ok","input":"c","steps":[{"line":6,"what":"returns"}],"outcome":"copy","assumptions":[]}]}"#;
 
 fn config(url: &str, fallback: Option<&str>) -> LlmConfig {
     LlmConfig {
@@ -115,8 +139,8 @@ fn request() -> ExplainRequest {
 fn sends_a_strict_schema_and_parses_the_answer() {
     let s = serve(vec![(200, completion(GOOD))]);
     let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
-    assert_eq!(llm.authors()[0].prompt, "v2-japanese");
-    let out = llm.explain(&request()).unwrap();
+    assert_eq!(llm.authors()[0].prompt, "v3-japanese");
+    let out = llm.explain(&request(), &mut |_| {}).unwrap();
     assert_eq!(out.author.model, "primary-model");
     assert!(out.warnings.is_empty());
     assert_eq!(
@@ -130,6 +154,11 @@ fn sends_a_strict_schema_and_parses_the_answer() {
     assert_eq!(body["model"], "primary-model");
     assert_eq!(body["response_format"]["type"], "json_schema");
     assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        "function_notes"
+    );
+    assert_eq!(body["stream"], true);
     let user = body["messages"][1]["content"].as_str().unwrap();
     assert!(user.contains("line 6: calls helper (defined in this file)"));
     assert!(
@@ -148,7 +177,7 @@ fn retries_a_malformed_answer_on_the_same_endpoint() {
     ]);
     let out = OpenAiCompatible::new(config(&s.url, None))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap();
     assert_eq!(out.author.model, "primary-model");
     assert_eq!(out.warnings.len(), 1);
@@ -164,7 +193,7 @@ fn gives_up_after_three_malformed_answers() {
     ]);
     let err = OpenAiCompatible::new(config(&s.url, None))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap_err();
     assert!(matches!(err, ExplainError::Malformed(_)));
 }
@@ -175,7 +204,7 @@ fn falls_back_on_a_server_error_and_says_so() {
     let fallback = serve(vec![(200, completion(GOOD))]);
     let out = OpenAiCompatible::new(config(&primary.url, Some(&fallback.url)))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap();
     assert_eq!(out.author.model, "fallback-model");
     assert!(
@@ -190,7 +219,7 @@ fn falls_back_when_the_primary_cannot_be_reached() {
     let fallback = serve(vec![(200, completion(GOOD))]);
     let out = OpenAiCompatible::new(config("http://127.0.0.1:9/v1", Some(&fallback.url)))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap();
     assert_eq!(out.author.model, "fallback-model");
 }
@@ -203,7 +232,7 @@ fn an_endpoint_without_structured_output_is_an_error_not_a_downgrade() {
     )]);
     let err = OpenAiCompatible::new(config(&s.url, None))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap_err();
     assert!(matches!(err, ExplainError::StructuredOutputUnsupported(_)));
 }
@@ -214,7 +243,7 @@ fn a_missing_api_key_variable_is_reported_by_name() {
     c.api_key_env = Some("CRT_TEST_KEY_THAT_IS_NOT_SET".into());
     let err = OpenAiCompatible::new(c)
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap_err();
     assert!(err.to_string().contains("CRT_TEST_KEY_THAT_IS_NOT_SET"));
 }
@@ -225,7 +254,7 @@ fn a_cut_off_answer_counts_as_malformed() {
     let s = serve(vec![(200, cut.clone()), (200, cut.clone()), (200, cut)]);
     let err = OpenAiCompatible::new(config(&s.url, None))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap_err();
     assert!(err.to_string().contains("cut off"));
 }
@@ -236,7 +265,7 @@ fn a_rate_limited_primary_falls_back() {
     let fallback = serve(vec![(200, completion(GOOD))]);
     let out = OpenAiCompatible::new(config(&primary.url, Some(&fallback.url)))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap();
     assert_eq!(out.author.model, "fallback-model");
 }
@@ -248,7 +277,7 @@ fn a_missing_key_on_the_primary_moves_to_the_fallback() {
     c.api_key_env = Some("CRT_TEST_KEY_THAT_IS_NOT_SET".into());
     let out = OpenAiCompatible::new(c)
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap();
     assert_eq!(out.author.model, "fallback-model");
     assert!(
@@ -289,7 +318,7 @@ fn authors_list_the_primary_then_the_fallbacks() {
 fn an_unreachable_endpoint_reports_the_underlying_cause() {
     let err = OpenAiCompatible::new(config("http://127.0.0.1:9/v1", None))
         .unwrap()
-        .explain(&request())
+        .explain(&request(), &mut |_| {})
         .unwrap_err();
     let msg = err.to_string().to_ascii_lowercase();
     assert!(msg.contains("connect") || msg.contains("refused"), "{msg}");
@@ -307,10 +336,67 @@ fn extra_body_is_sent_but_never_overrides_the_core_fields() {
     c.extra_body
         .insert("response_format".into(), json!({ "type": "text" }));
     let llm = OpenAiCompatible::new(c).unwrap();
-    assert!(llm.authors()[0].prompt.starts_with("v2-japanese-x"));
-    llm.explain(&request()).unwrap();
+    assert!(llm.authors()[0].prompt.starts_with("v3-japanese-x"));
+    llm.explain(&request(), &mut |_| {}).unwrap();
     let body = &s.seen.lock().unwrap()[0];
     assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
     assert_eq!(body["model"], "primary-model");
     assert_eq!(body["response_format"]["type"], "json_schema");
+}
+
+#[test]
+fn streamed_notes_arrive_one_by_one() {
+    let s = serve(vec![(200, events(TWO_NOTES, 5))]);
+    let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
+    let mut seen: Vec<usize> = vec![];
+    let out = llm
+        .explain(&request(), &mut |n| seen.push(n.len()))
+        .unwrap();
+    assert_eq!(seen, vec![1, 2]);
+    assert_eq!(out.draft.notes.len(), 2);
+}
+
+#[test]
+fn a_retry_starts_the_progress_over() {
+    let broken = r#"{"notes":[{"line":5,"text":"a","detail":"","assumptions":[],"basis":{"kind":"inference","call":null}},{"#;
+    let s = serve(vec![(200, events(broken, 7)), (200, events(GOOD, 7))]);
+    let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
+    let mut seen: Vec<usize> = vec![];
+    let out = llm
+        .explain(&request(), &mut |n| seen.push(n.len()))
+        .unwrap();
+    assert_eq!(seen, vec![1, 0, 1], "shown, cleared, shown again");
+    assert_eq!(out.draft.notes[0].line, 6);
+}
+
+#[test]
+fn a_cut_off_stream_counts_as_malformed() {
+    let cut = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({ "choices": [{ "delta": { "content": "{\"notes\":[" }, "finish_reason": "length" }] })
+    );
+    let s = serve(vec![(200, cut.clone()), (200, cut.clone()), (200, cut)]);
+    let err = OpenAiCompatible::new(config(&s.url, None))
+        .unwrap()
+        .explain(&request(), &mut |_| {})
+        .unwrap_err();
+    assert!(err.to_string().contains("cut off"), "{err}");
+}
+
+#[test]
+fn scenarios_are_a_separate_request_with_their_own_schema() {
+    let s = serve(vec![(200, events(SCENARIOS, 11))]);
+    let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
+    let out = llm.scenarios(&request()).unwrap();
+    assert_eq!(out.scenarios[0].steps[0].line, 6);
+    assert_eq!(out.author.model, "primary-model");
+    let body = &s.seen.lock().unwrap()[0];
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        "function_scenarios"
+    );
+    assert_eq!(
+        body["response_format"]["json_schema"]["schema"]["required"],
+        json!(["scenarios"])
+    );
 }

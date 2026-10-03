@@ -1,7 +1,7 @@
 // What to show at the end of each line. Pure: no VS Code API, so it is unit
 // tested and shared by the renderer.
 
-import type { FileReadingsParams, FunctionDto, ReadingDto } from "./protocol";
+import type { FileReadingsParams, FunctionDto, NoteDto } from "./protocol";
 
 export type Style = "fact" | "guess" | "call" | "pending";
 
@@ -17,18 +17,20 @@ const MARK: Record<"fact" | "inference", string> = { fact: "â— ", inference: "â
 /** Every annotated line of the document, in line order. */
 export function annotations(params: FileReadingsParams): Annotation[] {
   const pending = new Set(params.pending);
+  // Notes still arriving stand in for the reading until it is finished.
+  const partial = new Map((params.partial ?? []).map((p) => [p.functionHash, p.notes]));
   const out: Annotation[] = [];
   params.analysis.functions.forEach((fn, i) => {
-    const reading = params.readings[i] ?? null;
-    out.push(...forFunction(fn, reading, pending.has(fn.hash)));
+    const notes = partial.get(fn.hash) ?? params.readings[i]?.notes ?? [];
+    out.push(...forFunction(fn, notes, pending.has(fn.hash)));
   });
   return out.sort((a, b) => a.line - b.line);
 }
 
-function forFunction(fn: FunctionDto, reading: ReadingDto | null, pending: boolean): Annotation[] {
+function forFunction(fn: FunctionDto, all: NoteDto[], pending: boolean): Annotation[] {
   const out: Annotation[] = [];
   for (let line = fn.start_line; line <= fn.end_line; line++) {
-    const notes = reading?.notes.filter((n) => n.line === line) ?? [];
+    const notes = all.filter((n) => n.line === line);
     const first = notes[0];
     if (first) {
       const more = notes.length > 1 ? ` +${notes.length - 1}` : "";

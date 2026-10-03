@@ -58,7 +58,8 @@ export interface ReadingDto {
   model: string;
   prompt: string;
   notes: NoteDto[];
-  scenarios: ScenarioDto[];
+  /** `null` until scenarios are asked for (`codeReading/scenarios`). */
+  scenarios: ScenarioDto[] | null;
   demoted: number;
   dropped: number;
 }
@@ -69,6 +70,13 @@ export interface FileReadingsParams {
   analysis: FileAnalysisDto;
   readings: (ReadingDto | null)[];
   pending: string[];
+  /** Notes received so far for readings still being written. */
+  partial?: PartialNotesDto[];
+}
+
+export interface PartialNotesDto {
+  functionHash: string;
+  notes: NoteDto[];
 }
 
 export interface FunctionReadingDto {
@@ -83,4 +91,5 @@ export interface FunctionReadingDto {
 
 export const FILE_READINGS = "codeReading/fileReadings";
 export const READ = "codeReading/read";
+export const SCENARIOS = "codeReading/scenarios";
 export const VISIBLE_RANGE = "codeReading/visibleRange";

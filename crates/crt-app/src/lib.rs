@@ -7,10 +7,10 @@ pub mod read_function;
 
 pub use analyze_file::{AnalyzeError, FileAnalysis, analyze_file};
 pub use ports::{
-    Caller, ExplainError, ExplainRequest, Explained, Explainer, ReadingKey, ReadingStore,
-    StoreError, Structure, StructureError, StructureSource,
+    Caller, ExplainError, ExplainRequest, Explained, ExplainedScenarios, Explainer, ReadingKey,
+    ReadingStore, StoreError, Structure, StructureError, StructureSource,
 };
 pub use read_function::{
     FunctionReading, FunctionSelector, ReadError, ReadOptions, Readers, cached_readings,
-    read_function,
+    read_function, read_scenarios,
 };

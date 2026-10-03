@@ -4,11 +4,17 @@
 //! Server → client
 //! - `codeReading/fileReadings` (notification, [`FileReadingsParams`]):
 //!   the functions of a document, their structural facts, and their cached
-//!   readings. Sent on open, on change, and whenever a reading finishes.
+//!   readings, plus the notes received so far for readings still being
+//!   written. Sent on open, on change, while notes arrive, and whenever a
+//!   reading finishes.
 //!
 //! Client → server
 //! - `codeReading/read` (request, [`ReadParams`] → [`FunctionReadingDto`]):
-//!   read the function at a line now, asking the model if not cached.
+//!   read the notes of the function at a line now, asking the model if not
+//!   cached.
+//! - `codeReading/scenarios` (request, [`ReadParams`] → [`FunctionReadingDto`]):
+//!   the same reading with its scenarios, asking the model for them if not
+//!   cached. `refresh` rewrites the scenarios only.
 //! - `codeReading/visibleRange` (notification, [`VisibleRangeParams`]):
 //!   which lines the user can see; the server reads uncached functions there
 //!   when auto-read is on.
@@ -17,10 +23,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FileAnalysisDto, ReadingDto};
+use crate::{FileAnalysisDto, NoteDto, ReadingDto};
 
 pub const FILE_READINGS: &str = "codeReading/fileReadings";
 pub const READ: &str = "codeReading/read";
+pub const SCENARIOS: &str = "codeReading/scenarios";
 pub const VISIBLE_RANGE: &str = "codeReading/visibleRange";
 
 /// A document's functions with their cached readings.
@@ -36,6 +43,19 @@ pub struct FileReadingsParams {
     pub readings: Vec<Option<ReadingDto>>,
     /// Hashes of functions whose reading is being generated right now.
     pub pending: Vec<String>,
+    /// For pending functions, the checked notes received so far. Replaced
+    /// by the reading when it finishes.
+    #[serde(default)]
+    pub partial: Vec<PartialNotesDto>,
+}
+
+/// Notes of a reading still being written.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialNotesDto {
+    pub function_hash: String,
+    /// File lines, like a finished reading's.
+    pub notes: Vec<NoteDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -17,7 +17,7 @@ use crt_domain::{Call, Function, LineFacts, SymbolKind};
 
 /// Bumped whenever a shape below changes incompatibly. Adding a field is
 /// not a bump.
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileAnalysisDto {
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn serialises_a_function_with_its_facts() {
         let json = serde_json::to_value(FileAnalysisDto::from(&sample())).unwrap();
-        assert_eq!(json["wire_version"], 1);
+        assert_eq!(json["wire_version"], WIRE_VERSION);
         assert_eq!(json["has_syntax_error"], false);
         assert_eq!(json["functions"][0]["kind"], "method");
         assert_eq!(json["functions"][0]["enclosing"], "C");

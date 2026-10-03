@@ -1,18 +1,20 @@
-//! The HTTP side: one request per attempt, retries on a malformed answer,
-//! falls back to the next endpoint when one is down, rate-limited or not
-//! usable.
+//! The HTTP side: one streamed request per attempt, retries on a malformed
+//! answer, falls back to the next endpoint when one is down, rate-limited
+//! or not usable.
 
+use std::io::BufReader;
 use std::time::Duration;
 
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use crt_app::{ExplainError, ExplainRequest, Explained, Explainer};
-use crt_domain::{Author, Draft};
+use crt_app::{ExplainError, ExplainRequest, Explained, ExplainedScenarios, Explainer};
+use crt_domain::{Author, Note};
 
 use crate::config::{EndpointConfig, LlmConfig};
-use crate::prompt;
+use crate::prompt::{self, Task};
+use crate::stream::{ObjectScanner, read_events};
 
 /// How many times one endpoint is asked again when its answer does not
 /// fit the schema (after the first attempt).
@@ -76,8 +78,8 @@ fn check_endpoint(e: &EndpointConfig) -> Result<(), ExplainError> {
 }
 
 /// How one attempt against one endpoint ended.
-enum Attempt {
-    Ok(Draft),
+enum Attempt<T> {
+    Ok(T),
     /// The answer did not fit the schema; worth asking the same endpoint again.
     Malformed(String),
     /// Not usable right now (unreachable, server error, rate limit, missing
@@ -87,20 +89,88 @@ enum Attempt {
     Fatal(ExplainError),
 }
 
+/// A parsed answer and who wrote it.
+struct Answered<T> {
+    value: T,
+    author: Author,
+    warnings: Vec<String>,
+}
+
 impl Explainer for OpenAiCompatible {
     fn authors(&self) -> Vec<Author> {
         self.endpoints.iter().map(|e| self.author_for(e)).collect()
     }
 
-    fn explain(&self, request: &ExplainRequest) -> Result<Explained, ExplainError> {
+    fn explain(
+        &self,
+        request: &ExplainRequest,
+        on_progress: &mut dyn FnMut(&[Note]),
+    ) -> Result<Explained, ExplainError> {
+        let a = self.run(Task::Notes, request, on_progress, prompt::parse_notes)?;
+        Ok(Explained {
+            draft: a.value,
+            author: a.author,
+            warnings: a.warnings,
+        })
+    }
+
+    fn scenarios(&self, request: &ExplainRequest) -> Result<ExplainedScenarios, ExplainError> {
+        let a = self.run(
+            Task::Scenarios,
+            request,
+            &mut |_| {},
+            prompt::parse_scenarios,
+        )?;
+        Ok(ExplainedScenarios {
+            scenarios: a.value,
+            author: a.author,
+            warnings: a.warnings,
+        })
+    }
+}
+
+impl OpenAiCompatible {
+    /// Asks `task` of each endpoint in turn until one answers in shape.
+    /// For notes, `on_progress` sees the notes complete so far while the
+    /// answer streams in, and an empty list when an attempt starts over.
+    fn run<T>(
+        &self,
+        task: Task,
+        request: &ExplainRequest,
+        on_progress: &mut dyn FnMut(&[Note]),
+        parse: fn(&str) -> Result<T, String>,
+    ) -> Result<Answered<T>, ExplainError> {
         let mut warnings = Vec::new();
         let mut down = Vec::new();
+        let mut shown = false;
         for (i, endpoint) in self.endpoints.iter().enumerate() {
-            let body = self.body(request, &endpoint.model);
+            let body = self.body(task, request, &endpoint.model);
             let mut malformed: Option<String> = None;
             for attempt in 0..=MALFORMED_RETRIES {
-                match self.attempt(endpoint, &body) {
-                    Attempt::Ok(draft) => {
+                if shown {
+                    on_progress(&[]);
+                    shown = false;
+                }
+                let mut scanner = ObjectScanner::default();
+                let mut notes: Vec<Note> = Vec::new();
+                let mut on_content = |piece: &str| {
+                    if task != Task::Notes {
+                        return;
+                    }
+                    let before = notes.len();
+                    notes.extend(
+                        scanner
+                            .push(piece)
+                            .iter()
+                            .filter_map(|o| prompt::parse_note(o).ok()),
+                    );
+                    if notes.len() > before {
+                        on_progress(&notes);
+                        shown = true;
+                    }
+                };
+                match self.attempt(endpoint, &body, &mut on_content, parse) {
+                    Attempt::Ok(value) => {
                         if attempt > 0 {
                             warnings.push(format!(
                                 "{} answered in the wrong shape {attempt} time(s) before a valid answer",
@@ -114,8 +184,8 @@ impl Explainer for OpenAiCompatible {
                                 endpoint.model
                             ));
                         }
-                        return Ok(Explained {
-                            draft,
+                        return Ok(Answered {
+                            value,
                             author: self.author_for(endpoint),
                             warnings,
                         });
@@ -138,10 +208,8 @@ impl Explainer for OpenAiCompatible {
         }
         Err(ExplainError::Unreachable(down.join("; ")))
     }
-}
 
-impl OpenAiCompatible {
-    fn body(&self, request: &ExplainRequest, model: &str) -> Value {
+    fn body(&self, task: Task, request: &ExplainRequest, model: &str) -> Value {
         let mut body = serde_json::Map::new();
         for (k, v) in &self.extra_body {
             body.insert(k.clone(), v.clone());
@@ -149,13 +217,14 @@ impl OpenAiCompatible {
         let core = json!({
             "model": model,
             "messages": [
-                { "role": "system", "content": prompt::system(&self.output_language) },
-                { "role": "user", "content": prompt::user(request, &self.output_language) }
+                { "role": "system", "content": prompt::system(task, &self.output_language) },
+                { "role": "user", "content": prompt::user(task, request, &self.output_language) }
             ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": { "name": "function_reading", "strict": true, "schema": prompt::schema() }
-            }
+                "json_schema": { "name": task.name(), "strict": true, "schema": prompt::schema(task) }
+            },
+            "stream": true
         });
         // The core fields win over anything in extra_body.
         if let Value::Object(core) = core {
@@ -164,7 +233,16 @@ impl OpenAiCompatible {
         Value::Object(body)
     }
 
-    fn attempt(&self, endpoint: &EndpointConfig, body: &Value) -> Attempt {
+    /// One request. The answer's text is handed to `on_content` piece by
+    /// piece as it streams in; a server that answers without streaming
+    /// hands it over in one piece.
+    fn attempt<T>(
+        &self,
+        endpoint: &EndpointConfig,
+        body: &Value,
+        on_content: &mut dyn FnMut(&str),
+        parse: fn(&str) -> Result<T, String>,
+    ) -> Attempt<T> {
         let url = format!(
             "{}/chat/completions",
             endpoint.base_url.trim_end_matches('/')
@@ -186,6 +264,23 @@ impl OpenAiCompatible {
             Err(e) => return Attempt::Down(chain(&e)),
         };
         let status = response.status();
+        let streamed = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("text/event-stream"));
+        if status.is_success() && streamed {
+            return match read_events(BufReader::new(response), on_content) {
+                Ok(s) if s.finish_reason.as_deref() == Some("length") => {
+                    Attempt::Malformed("the answer was cut off at the output limit".into())
+                }
+                Ok(s) if !s.refusal.is_empty() => {
+                    Attempt::Malformed(format!("the model refused: {}", s.refusal))
+                }
+                Ok(s) => parsed(&s.content, parse),
+                Err(e) => Attempt::Down(e),
+            };
+        }
         let text = match response.text() {
             Ok(t) => t,
             Err(e) => return Attempt::Down(chain(&e)),
@@ -210,10 +305,20 @@ impl OpenAiCompatible {
                 snippet(&text)
             )));
         }
-        match content_of(&text).and_then(|c| prompt::parse(&c)) {
-            Ok(draft) => Attempt::Ok(draft),
+        match content_of(&text) {
+            Ok(content) => {
+                on_content(&content);
+                parsed(&content, parse)
+            }
             Err(e) => Attempt::Malformed(e),
         }
+    }
+}
+
+fn parsed<T>(content: &str, parse: fn(&str) -> Result<T, String>) -> Attempt<T> {
+    match parse(content) {
+        Ok(value) => Attempt::Ok(value),
+        Err(e) => Attempt::Malformed(e),
     }
 }
 

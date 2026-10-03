@@ -75,21 +75,12 @@ local function show(src_buf, src_win, fn, sc)
   return buf
 end
 
---- Opens the scenario view for the function under the cursor.
-function M.open()
-  local src_buf = vim.api.nvim_get_current_buf()
-  local src_win = vim.api.nvim_get_current_win()
-  local line = vim.api.nvim_win_get_cursor(src_win)[1]
-  local fn, reading = state.function_at(src_buf, line)
-  if not fn then
-    vim.notify("crt: no function under the cursor", vim.log.levels.WARN)
+local function choose(src_buf, src_win, fn, scenarios)
+  if #scenarios == 0 then
+    vim.notify("crt: no scenarios for " .. fn.name, vim.log.levels.INFO)
     return
   end
-  if not reading or #reading.scenarios == 0 then
-    vim.notify("crt: no scenarios for " .. fn.name .. " yet (:CrRead to read it)", vim.log.levels.INFO)
-    return
-  end
-  vim.ui.select(reading.scenarios, {
+  vim.ui.select(scenarios, {
     prompt = "Scenario for " .. fn.name,
     format_item = function(sc)
       return ("[%s] %s"):format(LABEL[sc.kind] or sc.kind, sc.title)
@@ -99,6 +90,46 @@ function M.open()
       show(src_buf, src_win, fn, sc)
     end
   end)
+end
+
+--- Opens the scenario view for the function under the cursor. Scenarios
+--- are written on first use (one model call), then come from the cache;
+--- `refresh` asks the model to write them again.
+function M.open(refresh)
+  local src_buf = vim.api.nvim_get_current_buf()
+  local src_win = vim.api.nvim_get_current_win()
+  local line = vim.api.nvim_win_get_cursor(src_win)[1]
+  local fn, reading = state.function_at(src_buf, line)
+  if not fn then
+    vim.notify("crt: no function under the cursor", vim.log.levels.WARN)
+    return
+  end
+  if not refresh and reading and state.present(reading.scenarios) then
+    choose(src_buf, src_win, fn, reading.scenarios)
+    return
+  end
+  local client = vim.lsp.get_clients({ bufnr = src_buf, name = "crt" })[1]
+  if not client then
+    vim.notify("crt: no crt server attached to this buffer", vim.log.levels.WARN)
+    return
+  end
+  vim.notify("crt: writing scenarios for " .. fn.name .. "…")
+  -- A custom method; Neovim's annotations only list the standard ones.
+  ---@diagnostic disable-next-line: param-type-mismatch
+  client:request("codeReading/scenarios", {
+    uri = vim.uri_from_bufnr(src_buf),
+    line = fn.start_line - 1,
+    refresh = refresh or false,
+  }, function(err, result)
+    if err then
+      vim.notify("crt: " .. err.message, vim.log.levels.ERROR)
+      return
+    end
+    if vim.api.nvim_win_is_valid(src_win) and vim.api.nvim_buf_is_valid(src_buf) then
+      vim.api.nvim_set_current_win(src_win)
+      choose(src_buf, src_win, fn, result.reading.scenarios or {})
+    end
+  end, src_buf)
 end
 
 return M

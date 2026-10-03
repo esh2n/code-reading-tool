@@ -4,15 +4,16 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crt_app::{FunctionSelector, ReadOptions, Readers};
-use crt_domain::{Function, Reading};
+use crt_domain::{Function, Note, Reading};
 use crt_wire::protocol::{
-    FILE_READINGS, FileReadingsParams, InitOptions, ReadParams, VisibleRangeParams,
+    FILE_READINGS, FileReadingsParams, InitOptions, PartialNotesDto, ReadParams, VisibleRangeParams,
 };
-use crt_wire::{FileAnalysisDto, FunctionReadingDto, ReadingDto};
+use crt_wire::{FileAnalysisDto, FunctionReadingDto, NoteDto, ReadingDto};
 use tokio::sync::Semaphore;
 use tower_lsp_server::jsonrpc::{Error as RpcError, ErrorCode, Result as RpcResult};
 use tower_lsp_server::ls_types::notification::Notification;
@@ -56,6 +57,16 @@ struct Inner {
     permits: OnceLock<Arc<Semaphore>>,
     /// Errors already shown, so auto-read does not repeat them.
     shown: Mutex<HashSet<String>>,
+    /// Notes received so far for readings being written, by (document
+    /// key, function hash), with the function's first line when the read
+    /// started so they can follow the function if lines move above it.
+    partial: Mutex<HashMap<ReadKey, Partial>>,
+    /// Numbers reads, so a read only ever removes its own partial notes.
+    next_read: AtomicU64,
+    /// Held for a whole publish: publishes compute and send one at a time,
+    /// so one that started earlier (say, from a progress update, before the
+    /// reading was stored) can never be sent after one that started later.
+    publishing: tokio::sync::Mutex<()>,
     /// Auto-reads that failed, and when. They are not retried on every
     /// scroll; an explicit read or the cooldown clears them.
     failed: Mutex<HashMap<(String, String), Instant>>,
@@ -71,6 +82,21 @@ type Cached = (crt_app::FileAnalysis, Vec<Option<Reading>>);
 /// How long a failed auto-read is left alone before scrolling past the
 /// function tries again.
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// How often notes still arriving are sent to the editor, at most.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Which reading a call is about: (document key, function hash).
+type ReadKey = (String, String);
+
+/// Notes received so far by one read.
+struct Partial {
+    /// Which read wrote them.
+    read: u64,
+    /// The function's first line when the read started.
+    started_at: usize,
+    notes: Vec<Note>,
+}
 
 /// Removes an in-flight key when the read ends, however it ends.
 struct InFlight {
@@ -99,6 +125,9 @@ impl Backend {
                 options: OnceLock::new(),
                 permits: OnceLock::new(),
                 shown: Mutex::new(HashSet::new()),
+                partial: Mutex::new(HashMap::new()),
+                next_read: AtomicU64::new(0),
+                publishing: tokio::sync::Mutex::new(()),
                 failed: Mutex::new(HashMap::new()),
             }),
         }
@@ -140,6 +169,7 @@ impl Backend {
 
     /// Sends the document's facts and readings, and its diagnostics.
     async fn publish(&self, key: &str) {
+        let _turn = self.inner.publishing.lock().await;
         let Some(doc) = self.doc(key) else { return };
         let cached = self.cached(&doc).await;
         // A newer version arrived while this one was being analysed; its own
@@ -160,6 +190,7 @@ impl Backend {
                 },
                 readings: vec![],
                 pending: vec![],
+                partial: vec![],
             };
             self.inner
                 .client
@@ -181,6 +212,7 @@ impl Backend {
             .flatten()
             .flat_map(|r| render::diagnostics(&doc.uri, r))
             .collect();
+        let partial = self.partial_notes(key, &analysis.functions);
         let params = FileReadingsParams {
             uri: key.to_string(),
             version: doc.version,
@@ -190,6 +222,7 @@ impl Backend {
                 .map(|r| r.as_ref().map(ReadingDto::from))
                 .collect(),
             pending,
+            partial,
         };
         self.inner
             .client
@@ -201,20 +234,116 @@ impl Backend {
             .await;
     }
 
-    /// Reads one function, asking the model if needed.
+    /// The notes still arriving for functions of this document, placed at
+    /// each function's current lines.
+    fn partial_notes(&self, key: &str, functions: &[Function]) -> Vec<PartialNotesDto> {
+        let partial = lock(&self.inner.partial);
+        functions
+            .iter()
+            .filter_map(|f| {
+                let hash = f.hash.to_string();
+                let p = partial.get(&(key.to_string(), hash.clone()))?;
+                // An empty list (a read starting over) would hide a cached
+                // reading being refreshed; send nothing instead.
+                if p.notes.is_empty() {
+                    return None;
+                }
+                let shift = f.span.start_line as isize - p.started_at as isize;
+                Some(PartialNotesDto {
+                    function_hash: hash,
+                    notes: p
+                        .notes
+                        .iter()
+                        .map(|n| {
+                            let mut dto = NoteDto::from(n);
+                            dto.line = n.line.saturating_add_signed(shift);
+                            dto
+                        })
+                        .collect(),
+                })
+            })
+            .collect()
+    }
+
+    /// Reads one function's notes, asking the model if needed. While the
+    /// model writes, the notes so far are sent to the editor (at most every
+    /// `PROGRESS_INTERVAL`).
     async fn read_function(
         &self,
         doc: &Doc,
-        selector: FunctionSelector,
+        function: &Function,
         refresh: bool,
     ) -> Result<crt_app::FunctionReading, String> {
+        let explainer = self.explainer()?;
         let services = self.inner.services.clone();
-        let Some(explainer) = services.explainer.clone() else {
-            return Err(services
-                .explainer_unavailable
-                .unwrap_or_else(|| "no LLM is configured".to_string()));
-        };
         let (path, text) = (doc.path.clone(), Arc::clone(&doc.text));
+        let read_key: ReadKey = (doc.uri.as_str().to_string(), function.hash.to_string());
+        let start_line = function.span.start_line;
+        let this = self.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let progress_key = read_key.clone();
+        let read = self.inner.next_read.fetch_add(1, Ordering::Relaxed);
+        let result = tokio::task::spawn_blocking(move || {
+            let readers = Readers {
+                structure: services.structure.as_ref(),
+                explainer: explainer.as_ref(),
+                store: services.store.as_ref(),
+            };
+            let options = ReadOptions {
+                refresh,
+                ..ReadOptions::default()
+            };
+            let mut last_sent: Option<Instant> = None;
+            let mut on_progress = |notes: &[Note]| {
+                lock(&this.inner.partial).insert(
+                    progress_key.clone(),
+                    Partial {
+                        read,
+                        started_at: start_line,
+                        notes: notes.to_vec(),
+                    },
+                );
+                if last_sent.is_some_and(|t| t.elapsed() < PROGRESS_INTERVAL) {
+                    return;
+                }
+                last_sent = Some(Instant::now());
+                let (this, uri) = (this.clone(), progress_key.0.clone());
+                runtime.spawn(async move { this.publish(&uri).await });
+            };
+            crt_app::read_function(
+                &readers,
+                &path,
+                &text,
+                &FunctionSelector::Line(start_line),
+                options,
+                &mut on_progress,
+            )
+            .map_err(|e| chain(&e))
+        })
+        .await
+        .map_err(|e| e.to_string());
+        {
+            // Another read of the same function may have started meanwhile;
+            // its notes are not ours to remove.
+            let mut partial = lock(&self.inner.partial);
+            if partial.get(&read_key).is_some_and(|p| p.read == read) {
+                partial.remove(&read_key);
+            }
+        }
+        result?
+    }
+
+    /// Reads one function's scenarios, asking the model if needed.
+    async fn read_scenarios(
+        &self,
+        doc: &Doc,
+        function: &Function,
+        refresh: bool,
+    ) -> Result<crt_app::FunctionReading, String> {
+        let explainer = self.explainer()?;
+        let services = self.inner.services.clone();
+        let (path, text) = (doc.path.clone(), Arc::clone(&doc.text));
+        let start_line = function.span.start_line;
         tokio::task::spawn_blocking(move || {
             let readers = Readers {
                 structure: services.structure.as_ref(),
@@ -225,11 +354,53 @@ impl Backend {
                 refresh,
                 ..ReadOptions::default()
             };
-            crt_app::read_function(&readers, &path, &text, &selector, options)
-                .map_err(|e| chain(&e))
+            crt_app::read_scenarios(
+                &readers,
+                &path,
+                &text,
+                &FunctionSelector::Line(start_line),
+                options,
+            )
+            .map_err(|e| chain(&e))
         })
         .await
         .map_err(|e| e.to_string())?
+    }
+
+    fn explainer(&self) -> Result<Arc<dyn crt_app::Explainer + Send + Sync>, String> {
+        let services = &self.inner.services;
+        services.explainer.clone().ok_or_else(|| {
+            services
+                .explainer_unavailable
+                .clone()
+                .unwrap_or_else(|| "no LLM is configured".to_string())
+        })
+    }
+
+    /// The innermost function of an open document containing the 0-based
+    /// `line`.
+    async fn function_at(&self, uri: &str, line: u32) -> RpcResult<(Doc, Function)> {
+        let doc = self
+            .doc(uri)
+            .ok_or_else(|| rpc_error(ErrorCode::InvalidParams, format!("{uri} is not open")))?;
+        let line = line as usize + 1;
+        let function = self
+            .cached(&doc)
+            .await
+            .and_then(|(analysis, _)| {
+                analysis
+                    .functions
+                    .into_iter()
+                    .filter(|f| f.span.start_line <= line && line <= f.span.end_line)
+                    .min_by_key(|f| f.span.len())
+            })
+            .ok_or_else(|| {
+                rpc_error(
+                    ErrorCode::InvalidParams,
+                    format!("no function at line {line}"),
+                )
+            })?;
+        Ok((doc, function))
     }
 
     async fn show_once(&self, message: String) {
@@ -243,19 +414,35 @@ impl Backend {
 
     /// `codeReading/read`.
     pub async fn read(&self, params: ReadParams) -> RpcResult<FunctionReadingDto> {
-        let doc = self.doc(&params.uri).ok_or_else(|| {
-            rpc_error(
-                ErrorCode::InvalidParams,
-                format!("{} is not open", params.uri),
-            )
-        })?;
-        let line = params.line as usize + 1;
-        let result = self
-            .read_function(&doc, FunctionSelector::Line(line), params.refresh)
-            .await
-            .map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
+        let (doc, function) = self.function_at(&params.uri, params.line).await?;
+        let key = (params.uri.clone(), function.hash.to_string());
+        let progress = self.begin_progress(&key, &function.name).await;
+        let result = self.read_function(&doc, &function, params.refresh).await;
+        if let Some(p) = progress {
+            p.finish().await;
+        }
+        let result = result.map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
         // Asking explicitly is a fresh start for auto-read in this file.
         lock(&self.inner.failed).retain(|(uri, _), _| uri != &params.uri);
+        for w in &result.warnings {
+            self.show_once(w.clone()).await;
+        }
+        self.publish(&params.uri).await;
+        Ok(FunctionReadingDto::from(&result))
+    }
+
+    /// `codeReading/scenarios`.
+    pub async fn scenarios(&self, params: ReadParams) -> RpcResult<FunctionReadingDto> {
+        let (doc, function) = self.function_at(&params.uri, params.line).await?;
+        let key = (params.uri.clone(), format!("{}/scenarios", function.hash));
+        let progress = self
+            .begin_progress(&key, &format!("scenarios of {}", function.name))
+            .await;
+        let result = self.read_scenarios(&doc, &function, params.refresh).await;
+        if let Some(p) = progress {
+            p.finish().await;
+        }
+        let result = result.map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
         for w in &result.warnings {
             self.show_once(w.clone()).await;
         }
@@ -321,12 +508,10 @@ impl Backend {
         let Some((function, None)) = target else {
             return;
         };
-        let start_line = function.span.start_line;
+        let function = function.clone();
         self.publish(&key.0).await;
         let progress = self.begin_progress(&key, &name).await;
-        let outcome = self
-            .read_function(&doc, FunctionSelector::Line(start_line), false)
-            .await;
+        let outcome = self.read_function(&doc, &function, false).await;
         drop(guard);
         if let Some(p) = progress {
             p.finish().await;

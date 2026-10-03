@@ -62,11 +62,11 @@ pub struct Scenario {
     pub assumptions: Vec<String>,
 }
 
-/// Notes and scenarios as the explainer wrote them, not yet checked.
+/// Notes as the explainer wrote them, not yet checked. Scenarios are
+/// written later, on request, and checked with [`Reading::with_scenarios`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draft {
     pub notes: Vec<Note>,
-    pub scenarios: Vec<Scenario>,
 }
 
 /// Who wrote a reading. Part of the cache key: a different model or prompt
@@ -95,7 +95,9 @@ pub struct Reading {
     pub author: Author,
     /// In line order.
     pub notes: Vec<Note>,
-    pub scenarios: Vec<Scenario>,
+    /// `None` until scenarios are asked for: they cost a second model call
+    /// and most readers only need the notes.
+    pub scenarios: Option<Vec<Scenario>>,
     pub check: CheckReport,
 }
 
@@ -103,47 +105,36 @@ impl Reading {
     /// Checks `draft` against `function`'s facts:
     /// - a note outside the function's lines is dropped;
     /// - a note claiming a fact the function does not have on that line is
-    ///   demoted to an inference (kept, never silently trusted);
-    /// - scenario steps outside the function's lines are dropped.
+    ///   demoted to an inference (kept, never silently trusted).
+    ///
+    /// The reading has no scenarios yet.
     pub fn check(function: &Function, author: Author, draft: Draft) -> Reading {
-        let mut report = CheckReport::default();
-        let inside =
-            |line: usize| function.span.start_line <= line && line <= function.span.end_line;
-
-        let mut notes: Vec<Note> = Vec::with_capacity(draft.notes.len());
-        for mut note in draft.notes {
-            if !inside(note.line) {
-                report.dropped += 1;
-                continue;
-            }
-            if let Basis::Fact(fact) = &note.basis
-                && !function.has_fact(note.line, fact)
-            {
-                note.basis = Basis::Inference;
-                report.demoted += 1;
-            }
-            notes.push(note);
-        }
-        notes.sort_by_key(|n| n.line);
-
-        let scenarios = draft
-            .scenarios
-            .into_iter()
-            .map(|mut s| {
-                let before = s.steps.len();
-                s.steps.retain(|step| inside(step.line));
-                report.dropped += before - s.steps.len();
-                s
-            })
-            .collect();
-
+        let (notes, check) = function.check_notes(draft.notes);
         Reading {
             function_hash: function.hash,
             author,
             notes,
-            scenarios,
-            check: report,
+            scenarios: None,
+            check,
         }
+    }
+
+    /// This reading with `scenarios` checked against `function` and
+    /// attached: steps outside the function's lines are dropped. Lines are
+    /// file lines, as in [`Reading::check`].
+    pub fn with_scenarios(&self, function: &Function, scenarios: Vec<Scenario>) -> Reading {
+        let mut out = self.clone();
+        let scenarios = scenarios
+            .into_iter()
+            .map(|mut s| {
+                let before = s.steps.len();
+                s.steps.retain(|step| function.contains_line(step.line));
+                out.check.dropped += before - s.steps.len();
+                s
+            })
+            .collect();
+        out.scenarios = Some(scenarios);
+        out
     }
 
     /// This reading with every line shifted by `delta`, which may be
@@ -156,7 +147,7 @@ impl Reading {
         for n in &mut out.notes {
             n.line = move_line(n.line);
         }
-        for s in &mut out.scenarios {
+        for s in out.scenarios.iter_mut().flatten() {
             for step in &mut s.steps {
                 step.line = move_line(step.line);
             }
@@ -179,6 +170,33 @@ impl Reading {
 }
 
 impl Function {
+    /// `notes` checked against this function's facts, in line order, as
+    /// [`Reading::check`] does. Also used on notes still arriving.
+    pub fn check_notes(&self, notes: Vec<Note>) -> (Vec<Note>, CheckReport) {
+        let mut report = CheckReport::default();
+        let mut kept: Vec<Note> = Vec::with_capacity(notes.len());
+        for mut note in notes {
+            if !self.contains_line(note.line) {
+                report.dropped += 1;
+                continue;
+            }
+            if let Basis::Fact(fact) = &note.basis
+                && !self.has_fact(note.line, fact)
+            {
+                note.basis = Basis::Inference;
+                report.demoted += 1;
+            }
+            kept.push(note);
+        }
+        kept.sort_by_key(|n| n.line);
+        (kept, report)
+    }
+
+    /// True when `line` is one of this function's lines.
+    pub fn contains_line(&self, line: usize) -> bool {
+        self.span.start_line <= line && line <= self.span.end_line
+    }
+
     /// True when the fact holds on `line` of this function.
     pub fn has_fact(&self, line: usize, fact: &FactRef) -> bool {
         match fact {
@@ -254,13 +272,13 @@ mod tests {
                 ),
                 note(13, Basis::Inference),
             ],
-            scenarios: vec![],
         };
         let r = Reading::check(&function(), author(), draft);
         assert_eq!(
             r.notes.iter().map(|n| n.line).collect::<Vec<_>>(),
             vec![11, 12, 13]
         );
+        assert_eq!(r.scenarios, None);
         assert!(matches!(r.notes[0].basis, Basis::Fact(_)));
         assert_eq!(r.notes[1].basis, Basis::Inference);
         assert_eq!(
@@ -280,27 +298,27 @@ mod tests {
                 note(15, Basis::Inference),
                 note(10, Basis::Inference),
             ],
-            scenarios: vec![Scenario {
-                kind: ScenarioKind::Boundary,
-                title: "empty".into(),
-                input: "x = \"\"".into(),
-                steps: vec![
-                    Step {
-                        line: 11,
-                        what: "validate rejects".into(),
-                    },
-                    Step {
-                        line: 40,
-                        what: "elsewhere".into(),
-                    },
-                ],
-                outcome: "error".into(),
-                assumptions: vec![],
-            }],
         };
-        let r = Reading::check(&function(), author(), draft);
+        let scenarios = vec![Scenario {
+            kind: ScenarioKind::Boundary,
+            title: "empty".into(),
+            input: "x = \"\"".into(),
+            steps: vec![
+                Step {
+                    line: 11,
+                    what: "validate rejects".into(),
+                },
+                Step {
+                    line: 40,
+                    what: "elsewhere".into(),
+                },
+            ],
+            outcome: "error".into(),
+            assumptions: vec![],
+        }];
+        let r = Reading::check(&function(), author(), draft).with_scenarios(&function(), scenarios);
         assert_eq!(r.notes.len(), 1);
-        assert_eq!(r.scenarios[0].steps.len(), 1);
+        assert_eq!(r.scenarios.as_ref().unwrap()[0].steps.len(), 1);
         assert_eq!(r.check.dropped, 3);
         assert_eq!(r.function_hash, function().hash);
     }
@@ -309,25 +327,25 @@ mod tests {
     fn a_reading_survives_its_function_moving_down_the_file() {
         let draft = Draft {
             notes: vec![note(11, Basis::Inference)],
-            scenarios: vec![Scenario {
-                kind: ScenarioKind::Normal,
-                title: "t".into(),
-                input: "i".into(),
-                steps: vec![Step {
-                    line: 12,
-                    what: "w".into(),
-                }],
-                outcome: "o".into(),
-                assumptions: vec![],
-            }],
         };
-        let r = Reading::check(&function(), author(), draft);
+        let scenarios = vec![Scenario {
+            kind: ScenarioKind::Normal,
+            title: "t".into(),
+            input: "i".into(),
+            steps: vec![Step {
+                line: 12,
+                what: "w".into(),
+            }],
+            outcome: "o".into(),
+            assumptions: vec![],
+        }];
+        let r = Reading::check(&function(), author(), draft).with_scenarios(&function(), scenarios);
         let stored = r.relative_to(10);
         assert_eq!(stored.notes[0].line, 1);
-        assert_eq!(stored.scenarios[0].steps[0].line, 2);
+        assert_eq!(stored.scenarios.as_ref().unwrap()[0].steps[0].line, 2);
         let moved = stored.placed_at(25);
         assert_eq!(moved.notes[0].line, 26);
-        assert_eq!(moved.scenarios[0].steps[0].line, 27);
+        assert_eq!(moved.scenarios.as_ref().unwrap()[0].steps[0].line, 27);
         assert_eq!(stored.placed_at(10), r);
     }
 }

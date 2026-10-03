@@ -3,7 +3,9 @@
 use std::fmt;
 use std::path::Path;
 
-use crt_domain::{Author, ContentHash, Draft, Function, LanguageId, Reading, Symbol};
+use crt_domain::{
+    Author, ContentHash, Draft, Function, LanguageId, Note, Reading, Scenario, Symbol,
+};
 
 /// What a structure source found in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,14 +77,36 @@ pub struct Explained {
     pub warnings: Vec<String>,
 }
 
-/// Writes per-line notes and behaviour scenarios for a function.
+/// Scenarios the explainer wrote, and who actually wrote them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainedScenarios {
+    pub scenarios: Vec<Scenario>,
+    pub author: Author,
+    pub warnings: Vec<String>,
+}
+
+/// Writes per-line notes and, separately and on request, behaviour
+/// scenarios for a function. Two calls rather than one because the notes
+/// are wanted as soon as a file opens and the scenarios rarely are; one
+/// answer holding both takes several times longer to arrive.
 pub trait Explainer {
     /// Every author this explainer can write as, primary first, then the
     /// fallbacks in order. Used to look up the cache before calling
     /// anything.
     fn authors(&self) -> Vec<Author>;
 
-    fn explain(&self, request: &ExplainRequest) -> Result<Explained, ExplainError>;
+    /// Writes the notes. `on_progress` is called with every note received
+    /// so far, unchecked, each time one more arrives. It may start again
+    /// from fewer notes (a retry or a fallback starts over); each call
+    /// replaces what the previous one said.
+    fn explain(
+        &self,
+        request: &ExplainRequest,
+        on_progress: &mut dyn FnMut(&[Note]),
+    ) -> Result<Explained, ExplainError>;
+
+    /// Writes the scenarios.
+    fn scenarios(&self, request: &ExplainRequest) -> Result<ExplainedScenarios, ExplainError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

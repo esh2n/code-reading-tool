@@ -27,7 +27,8 @@ pub struct ReadingDto {
     pub model: String,
     pub prompt: String,
     pub notes: Vec<NoteDto>,
-    pub scenarios: Vec<ScenarioDto>,
+    /// `null` until scenarios are asked for.
+    pub scenarios: Option<Vec<ScenarioDto>>,
     /// Notes demoted from fact to guess by the checker.
     pub demoted: usize,
     /// Notes or steps removed because they were outside the function.
@@ -97,7 +98,10 @@ impl From<&Reading> for ReadingDto {
             model: r.author.model.clone(),
             prompt: r.author.prompt.clone(),
             notes: r.notes.iter().map(NoteDto::from).collect(),
-            scenarios: r.scenarios.iter().map(ScenarioDto::from).collect(),
+            scenarios: r
+                .scenarios
+                .as_ref()
+                .map(|s| s.iter().map(ScenarioDto::from).collect()),
             demoted: r.check.demoted,
             dropped: r.check.dropped,
         }
@@ -168,7 +172,9 @@ impl TryFrom<ReadingDto> for Reading {
                 prompt: d.prompt,
             },
             notes: d.notes.into_iter().map(Note::from).collect(),
-            scenarios: d.scenarios.into_iter().map(Scenario::from).collect(),
+            scenarios: d
+                .scenarios
+                .map(|s| s.into_iter().map(Scenario::from).collect()),
             check: CheckReport {
                 demoted: d.demoted,
                 dropped: d.dropped,
@@ -244,7 +250,7 @@ mod tests {
                     basis: Basis::Inference,
                 },
             ],
-            scenarios: vec![Scenario {
+            scenarios: Some(vec![Scenario {
                 kind: ScenarioKind::Concurrent,
                 title: "two at once".into(),
                 input: "two requests".into(),
@@ -254,7 +260,7 @@ mod tests {
                 }],
                 outcome: "lost update".into(),
                 assumptions: vec![],
-            }],
+            }]),
             check: CheckReport {
                 demoted: 1,
                 dropped: 2,
@@ -276,9 +282,13 @@ mod tests {
                 prompt: "v1".into(),
             },
             notes: vec![],
-            scenarios: vec![],
+            scenarios: None,
             check: CheckReport::default(),
         });
+        assert_eq!(
+            serde_json::to_value(&dto).unwrap()["scenarios"],
+            serde_json::Value::Null
+        );
         dto.function_hash = "zz".into();
         assert!(Reading::try_from(dto).is_err());
     }

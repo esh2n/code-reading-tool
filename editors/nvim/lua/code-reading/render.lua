@@ -22,14 +22,20 @@ local MARK = { fact = "● ", inference = "◌ " }
 local HL = { fact = "CodeReadingFact", inference = "CodeReadingGuess" }
 
 --- The virtual text chunks for every annotated line, keyed by 1-based line.
---- Exposed for tests.
-function M.chunks(params, pending)
+--- `partial` holds notes still arriving, by function hash; they stand in
+--- for the reading until it is finished. Exposed for tests.
+function M.chunks(params, pending, partial)
   local out = {}
+  partial = partial or {}
   for i, f in ipairs(params.analysis.functions) do
     local reading = params.readings[i]
+    local notes = partial[f.hash]
+    if not notes and state.present(reading) then
+      notes = reading.notes
+    end
     local notes_by_line = {}
-    if state.present(reading) then
-      for _, n in ipairs(reading.notes) do
+    if notes then
+      for _, n in ipairs(notes) do
         notes_by_line[n.line] = notes_by_line[n.line] or {}
         table.insert(notes_by_line[n.line], n)
       end
@@ -73,7 +79,7 @@ function M.draw(bufnr)
     return
   end
   local count = vim.api.nvim_buf_line_count(bufnr)
-  for line, chunks in pairs(M.chunks(s.params, s.pending)) do
+  for line, chunks in pairs(M.chunks(s.params, s.pending, s.partial)) do
     if line <= count then
       vim.api.nvim_buf_set_extmark(bufnr, M.ns, line - 1, 0, {
         virt_text = chunks,

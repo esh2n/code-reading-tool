@@ -1,10 +1,11 @@
-//! Use cases: read one function (cache first, then the explainer), and list
-//! the readings a file already has in the cache.
+//! Use cases: read one function's notes (cache first, then the explainer),
+//! read its scenarios on request, and list the readings a file already has
+//! in the cache.
 
 use std::fmt;
 use std::path::Path;
 
-use crt_domain::{Author, Function, LanguageId, Reading};
+use crt_domain::{Author, Function, LanguageId, Note, Reading};
 
 use crate::analyze_file::{AnalyzeError, FileAnalysis, analyze_file};
 use crate::ports::{
@@ -89,24 +90,24 @@ pub struct Readers<'a> {
     pub store: &'a dyn ReadingStore,
 }
 
-/// Reads one function: from the cache when its source is unchanged,
-/// otherwise from the explainer, checked against the function's facts and
-/// stored for next time.
+/// Reads one function's notes: from the cache when its source is
+/// unchanged, otherwise from the explainer, checked against the function's
+/// facts and stored for next time. `on_progress` receives the checked notes
+/// received so far while the explainer is still writing; each call replaces
+/// the previous one.
 pub fn read_function(
     readers: &Readers<'_>,
     path: &Path,
     source: &[u8],
     selector: &FunctionSelector,
     options: ReadOptions,
+    on_progress: &mut dyn FnMut(&[Note]),
 ) -> Result<FunctionReading, ReadError> {
-    let analysis = analyze_file(readers.structure, path, source)?;
-    let function = select(&analysis, selector)
-        .ok_or_else(|| ReadError::NoSuchFunction(selector.clone()))?
-        .clone();
+    let (analysis, function) = load(readers, path, source, selector)?;
     let mut warnings = Vec::new();
-    let authors = readers.explainer.authors();
 
     if !options.refresh {
+        let authors = readers.explainer.authors();
         let found = lookup(
             readers.store,
             &analysis.language,
@@ -115,36 +116,133 @@ pub fn read_function(
             &mut warnings,
         );
         if let Some(reading) = found {
-            return Ok(FunctionReading {
-                language: analysis.language,
-                function,
-                reading,
-                from_cache: true,
-                has_syntax_error: analysis.has_syntax_error,
-                warnings,
-            });
+            return Ok(finish(analysis, function, reading, true, warnings));
         }
     }
 
-    let request = ExplainRequest {
-        language: analysis.language.clone(),
-        numbered_source: numbered(source, &function),
-        callers: callers_of(&analysis, &function, source, options.max_callers),
-        function: function.clone(),
+    let request = request_for(&analysis, &function, source, options);
+    let mut checked_progress = |raw: &[Note]| {
+        let (notes, _) = function.check_notes(raw.to_vec());
+        on_progress(&notes);
     };
     let explained = readers
         .explainer
-        .explain(&request)
+        .explain(&request, &mut checked_progress)
         .map_err(ReadError::Explain)?;
     warnings.extend(explained.warnings);
-    let reading = Reading::check(&function, explained.author.clone(), explained.draft);
-
     // Stored under the author that actually wrote it, so a fallback's
     // reading is always labelled as the fallback's.
-    let key = ReadingKey {
+    let reading = Reading::check(&function, explained.author, explained.draft);
+    save(
+        readers,
+        &analysis.language,
+        &function,
+        &reading,
+        &mut warnings,
+    );
+    Ok(finish(analysis, function, reading, false, warnings))
+}
+
+/// Reads one function's scenarios, reading its notes first when there are
+/// none yet. Cached scenarios are returned unless `options.refresh`, which
+/// rewrites the scenarios only, never the notes.
+pub fn read_scenarios(
+    readers: &Readers<'_>,
+    path: &Path,
+    source: &[u8],
+    selector: &FunctionSelector,
+    options: ReadOptions,
+) -> Result<FunctionReading, ReadError> {
+    let lines = read_function(
+        readers,
+        path,
+        source,
+        selector,
+        ReadOptions {
+            refresh: false,
+            ..options
+        },
+        &mut |_| {},
+    )?;
+    if lines.reading.scenarios.is_some() && !options.refresh {
+        return Ok(lines);
+    }
+    let FunctionReading {
+        language,
+        function,
+        reading,
+        has_syntax_error,
+        mut warnings,
+        ..
+    } = lines;
+
+    let analysis = analyze_file(readers.structure, path, source)?;
+    let request = request_for(&analysis, &function, source, options);
+    let explained = readers
+        .explainer
+        .scenarios(&request)
+        .map_err(ReadError::Explain)?;
+    warnings.extend(explained.warnings);
+    if explained.author != reading.author {
+        warnings.push(format!(
+            "the scenarios were written by {}, the notes by {}",
+            explained.author.model, reading.author.model
+        ));
+    }
+    // Kept with the notes, under the notes' author: one reading per
+    // function and author, whoever wrote its scenarios.
+    let reading = reading.with_scenarios(&function, explained.scenarios);
+    save(readers, &language, &function, &reading, &mut warnings);
+    Ok(FunctionReading {
+        language,
+        function,
+        reading,
+        from_cache: false,
+        has_syntax_error,
+        warnings,
+    })
+}
+
+fn load(
+    readers: &Readers<'_>,
+    path: &Path,
+    source: &[u8],
+    selector: &FunctionSelector,
+) -> Result<(FileAnalysis, Function), ReadError> {
+    let analysis = analyze_file(readers.structure, path, source)?;
+    let function = select(&analysis, selector)
+        .ok_or_else(|| ReadError::NoSuchFunction(selector.clone()))?
+        .clone();
+    Ok((analysis, function))
+}
+
+fn request_for(
+    analysis: &FileAnalysis,
+    function: &Function,
+    source: &[u8],
+    options: ReadOptions,
+) -> ExplainRequest {
+    ExplainRequest {
         language: analysis.language.clone(),
+        numbered_source: numbered(source, function),
+        callers: callers_of(analysis, function, source, options.max_callers),
+        function: function.clone(),
+    }
+}
+
+/// Stores `reading` (file lines) in the relative form the store keeps. A
+/// failing store becomes a warning, never an error.
+fn save(
+    readers: &Readers<'_>,
+    language: &LanguageId,
+    function: &Function,
+    reading: &Reading,
+    warnings: &mut Vec<String>,
+) {
+    let key = ReadingKey {
+        language: language.clone(),
         function_hash: function.hash,
-        author: explained.author,
+        author: reading.author.clone(),
     };
     if let Err(e) = readers
         .store
@@ -152,14 +250,23 @@ pub fn read_function(
     {
         warnings.push(e.to_string());
     }
-    Ok(FunctionReading {
+}
+
+fn finish(
+    analysis: FileAnalysis,
+    function: Function,
+    reading: Reading,
+    from_cache: bool,
+    warnings: Vec<String>,
+) -> FunctionReading {
+    FunctionReading {
         language: analysis.language,
         function,
         reading,
-        from_cache: false,
+        from_cache,
         has_syntax_error: analysis.has_syntax_error,
         warnings,
-    })
+    }
 }
 
 /// Every function in the file with its cached reading, if any. Never calls
@@ -265,8 +372,10 @@ fn callers_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{Explained, StoreError, Structure, StructureError};
-    use crt_domain::{Author, Basis, Draft, FactRef, Note, Span, Symbol, SymbolKind};
+    use crate::ports::{Explained, ExplainedScenarios, StoreError, Structure, StructureError};
+    use crt_domain::{
+        Author, Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Span, Step, Symbol, SymbolKind,
+    };
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -326,6 +435,7 @@ mod tests {
 
     struct Scripted {
         calls: RefCell<Vec<ExplainRequest>>,
+        scenario_calls: RefCell<Vec<ExplainRequest>>,
         actual_model: &'static str,
     }
     impl Explainer for Scripted {
@@ -338,34 +448,68 @@ mod tests {
                 })
                 .collect()
         }
-        fn explain(&self, r: &ExplainRequest) -> Result<Explained, ExplainError> {
+        fn explain(
+            &self,
+            r: &ExplainRequest,
+            on_progress: &mut dyn FnMut(&[Note]),
+        ) -> Result<Explained, ExplainError> {
             self.calls.borrow_mut().push(r.clone());
+            let notes = vec![
+                Note {
+                    line: 3,
+                    text: "calls x".into(),
+                    detail: None,
+                    assumptions: vec![],
+                    basis: Basis::Fact(FactRef::Call { name: "x".into() }),
+                },
+                Note {
+                    line: 2,
+                    text: "claims a call that is not there".into(),
+                    detail: None,
+                    assumptions: vec![],
+                    basis: Basis::Fact(FactRef::Call { name: "y".into() }),
+                },
+            ];
+            on_progress(&notes[..1]);
+            on_progress(&notes);
             Ok(Explained {
-                draft: Draft {
-                    notes: vec![
-                        Note {
-                            line: 3,
-                            text: "calls x".into(),
-                            detail: None,
-                            assumptions: vec![],
-                            basis: Basis::Fact(FactRef::Call { name: "x".into() }),
-                        },
-                        Note {
-                            line: 2,
-                            text: "claims a call that is not there".into(),
-                            detail: None,
-                            assumptions: vec![],
-                            basis: Basis::Fact(FactRef::Call { name: "y".into() }),
-                        },
-                    ],
-                    scenarios: vec![],
-                },
-                author: Author {
-                    model: self.actual_model.into(),
-                    prompt: "v1".into(),
-                },
+                draft: Draft { notes },
+                author: self.author(),
                 warnings: vec![],
             })
+        }
+        fn scenarios(&self, r: &ExplainRequest) -> Result<ExplainedScenarios, ExplainError> {
+            self.scenario_calls.borrow_mut().push(r.clone());
+            Ok(ExplainedScenarios {
+                scenarios: vec![Scenario {
+                    kind: ScenarioKind::Normal,
+                    title: "t".into(),
+                    input: "i".into(),
+                    steps: vec![
+                        Step {
+                            line: 3,
+                            what: "x runs".into(),
+                        },
+                        Step {
+                            line: 9,
+                            what: "outside".into(),
+                        },
+                    ],
+                    outcome: "o".into(),
+                    assumptions: vec![],
+                }],
+                author: self.author(),
+                warnings: vec![],
+            })
+        }
+    }
+
+    impl Scripted {
+        fn author(&self) -> Author {
+            Author {
+                model: self.actual_model.into(),
+                prompt: "v1".into(),
+            }
         }
     }
 
@@ -384,6 +528,7 @@ mod tests {
     fn scripted(model: &'static str) -> Scripted {
         Scripted {
             calls: RefCell::new(vec![]),
+            scenario_calls: RefCell::new(vec![]),
             actual_model: model,
         }
     }
@@ -405,6 +550,7 @@ mod tests {
             SRC,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         assert!(!first.from_cache);
@@ -422,6 +568,7 @@ mod tests {
             SRC,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         assert!(second.from_cache);
@@ -445,6 +592,7 @@ mod tests {
             SRC,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         let again = read_function(
@@ -453,6 +601,7 @@ mod tests {
             SRC,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         assert!(again.from_cache);
@@ -482,6 +631,7 @@ mod tests {
             SRC,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         assert_eq!(first.reading.notes[1].line, 3);
@@ -500,6 +650,7 @@ mod tests {
             &src,
             &sel,
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         assert!(again.from_cache);
@@ -526,6 +677,7 @@ mod tests {
             SRC,
             &FunctionSelector::Name("f".into()),
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap();
         let (analysis, readings) =
@@ -551,8 +703,120 @@ mod tests {
             SRC,
             &FunctionSelector::Line(99),
             ReadOptions::default(),
+            &mut |_| {},
         )
         .unwrap_err();
         assert_eq!(err.to_string(), "no function at line 99");
+    }
+
+    #[test]
+    fn progress_carries_checked_notes_as_they_arrive() {
+        let explainer = scripted("primary");
+        let store = Memory::default();
+        let readers = Readers {
+            structure: &Fake,
+            explainer: &explainer,
+            store: &store,
+        };
+        let mut seen: Vec<Vec<Note>> = vec![];
+        read_function(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &FunctionSelector::Name("f".into()),
+            ReadOptions::default(),
+            &mut |n| seen.push(n.to_vec()),
+        )
+        .unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].len(), 1);
+        assert_eq!(seen[1][0].line, 2, "sorted by line");
+        assert_eq!(seen[1][0].basis, Basis::Inference, "already checked");
+    }
+
+    #[test]
+    fn scenarios_are_written_on_request_once_and_kept_with_the_notes() {
+        let explainer = scripted("primary");
+        let store = Memory::default();
+        let readers = Readers {
+            structure: &Fake,
+            explainer: &explainer,
+            store: &store,
+        };
+        let sel = FunctionSelector::Name("f".into());
+        let lines = read_function(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &sel,
+            ReadOptions::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(lines.reading.scenarios, None);
+        assert!(explainer.scenario_calls.borrow().is_empty());
+
+        let first = read_scenarios(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &sel,
+            ReadOptions::default(),
+        )
+        .unwrap();
+        let scenarios = first.reading.scenarios.clone().unwrap();
+        assert_eq!(scenarios[0].steps.len(), 1, "the step outside was dropped");
+        assert_eq!(first.reading.notes, lines.reading.notes);
+        assert_eq!(
+            explainer.calls.borrow().len(),
+            1,
+            "notes came from the cache"
+        );
+
+        let again = read_scenarios(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &sel,
+            ReadOptions::default(),
+        )
+        .unwrap();
+        assert!(again.from_cache);
+        assert_eq!(again.reading, first.reading);
+        assert_eq!(explainer.scenario_calls.borrow().len(), 1);
+
+        let notes_again = read_function(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &sel,
+            ReadOptions::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(notes_again.reading.scenarios.is_some());
+    }
+
+    #[test]
+    fn scenarios_without_notes_read_the_notes_first() {
+        let explainer = scripted("primary");
+        let store = Memory::default();
+        let readers = Readers {
+            structure: &Fake,
+            explainer: &explainer,
+            store: &store,
+        };
+        let r = read_scenarios(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &FunctionSelector::Line(3),
+            ReadOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(r.reading.notes.len(), 2);
+        assert!(r.reading.scenarios.is_some());
+        assert_eq!(explainer.calls.borrow().len(), 1);
+        assert_eq!(explainer.scenario_calls.borrow().len(), 1);
     }
 }

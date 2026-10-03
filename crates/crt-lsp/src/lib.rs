@@ -33,6 +33,7 @@ where
 {
     let (service, socket) = LspService::build(|client| Backend::new(client, services))
         .custom_method(crt_wire::protocol::READ, Backend::read)
+        .custom_method(crt_wire::protocol::SCENARIOS, Backend::scenarios)
         .custom_method(crt_wire::protocol::VISIBLE_RANGE, Backend::visible_range)
         .finish();
     Server::new(input, output, socket).serve(service).await;

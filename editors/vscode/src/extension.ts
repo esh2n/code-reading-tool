@@ -19,6 +19,7 @@ import {
   type FunctionReadingDto,
   READ,
   type ReadingDto,
+  SCENARIOS,
   VISIBLE_RANGE,
 } from "./protocol";
 import { scenarioLabel, scenarioText } from "./scenario";
@@ -166,9 +167,27 @@ async function showScenario(): Promise<void> {
     void vscode.window.showInformationMessage("Code Reading: no function under the cursor.");
     return;
   }
-  const scenarios = found.reading?.scenarios ?? [];
+  let scenarios = found.reading?.scenarios ?? null;
+  if (scenarios === null) {
+    // Written on first use (one model call), then cached with the notes.
+    if (!client) return;
+    const c = client;
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: `Code Reading: writing scenarios for ${found.fn.name}…` },
+      () =>
+        c.sendRequest<FunctionReadingDto>(SCENARIOS, {
+          uri: editor.document.uri.toString(),
+          line: found.fn.start_line - 1,
+          refresh: false,
+        }),
+    );
+    for (const w of result.warnings) {
+      void vscode.window.showWarningMessage(`Code Reading: ${w}`);
+    }
+    scenarios = result.reading.scenarios ?? [];
+  }
   if (scenarios.length === 0) {
-    void vscode.window.showInformationMessage(`Code Reading: no scenarios for ${found.fn.name} yet.`);
+    void vscode.window.showInformationMessage(`Code Reading: no scenarios for ${found.fn.name}.`);
     return;
   }
   const pick = await vscode.window.showQuickPick(
@@ -192,6 +211,8 @@ async function showScenario(): Promise<void> {
 /** For tests: what this extension last rendered for a document. */
 export interface TestApi {
   annotationsFor(uri: string): Annotation[];
+  /** True once notes still being written were received for `uri`. */
+  sawPartial(uri: string): boolean;
   waitForReadings(uri: string, timeoutMs: number): Promise<FileReadingsParams>;
 }
 
@@ -214,8 +235,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
   client = new LanguageClient("crt", "Code Reading", server, options);
 
   const waiters: { uri: string; done: (p: FileReadingsParams) => boolean }[] = [];
+  const partialSeen = new Set<string>();
   client.onNotification(FILE_READINGS, (params: FileReadingsParams) => {
     latest.set(params.uri, params);
+    if ((params.partial ?? []).some((p) => p.notes.length > 0)) partialSeen.add(params.uri);
     for (const editor of vscode.window.visibleTextEditors) {
       if (editor.document.uri.toString() === params.uri) render(editor);
     }
@@ -254,6 +277,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
   for (const e of vscode.window.visibleTextEditors) reportView(e);
 
   return {
+    sawPartial: (uri) => partialSeen.has(uri),
     annotationsFor: (uri) => {
       const p = latest.get(uri);
       return p ? annotations(p) : [];

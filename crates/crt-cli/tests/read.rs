@@ -41,8 +41,14 @@ fn serve(bodies: Vec<String>) -> String {
 
 const SOURCE: &str = "package p\n\ntype C struct{}\n\nfunc (c *C) Copy() *C {\n\treturn helper(c)\n}\n\nfunc helper(c *C) *C { return c }\n";
 
-fn answer() -> String {
-    let content = json!({
+fn completion(content: String) -> String {
+    json!({ "choices": [{ "finish_reason": "stop", "message": { "role": "assistant", "content": content } }] })
+        .to_string()
+}
+
+/// A notes answer, sent without streaming (some servers ignore `stream`).
+fn notes() -> String {
+    completion(json!({
         "notes": [
             { "line": 6, "text": "calls helper", "detail": "", "assumptions": [],
               "basis": { "kind": "fact", "call": "helper" } },
@@ -52,18 +58,24 @@ fn answer() -> String {
               "basis": { "kind": "inference", "call": null } },
             { "line": 42, "text": "outside the function", "detail": "", "assumptions": [],
               "basis": { "kind": "inference", "call": null } }
-        ],
-        "scenarios": [
-            { "kind": "boundary", "title": "nil receiver", "input": "c == nil",
-              "steps": [{ "line": 6, "what": "helper gets nil" }], "outcome": "returns nil", "assumptions": [] }
         ]
     })
-    .to_string();
-    json!({ "choices": [{ "finish_reason": "stop", "message": { "role": "assistant", "content": content } }] })
-        .to_string()
+    .to_string())
 }
 
-fn run(dir: &std::path::Path, args: &[&str]) -> Value {
+fn scenarios() -> String {
+    completion(json!({
+        "scenarios": [
+            { "kind": "boundary", "title": "nil receiver", "input": "c == nil",
+              "steps": [{ "line": 6, "what": "helper gets nil" }, { "line": 40, "what": "outside" }],
+              "outcome": "returns nil", "assumptions": [] }
+        ]
+    })
+    .to_string())
+}
+
+/// Runs `crt` and returns its JSON output and its stderr.
+fn run_with_stderr(dir: &std::path::Path, args: &[&str]) -> (Value, String) {
     let out = Command::cargo_bin("crt")
         .unwrap()
         .args(args)
@@ -73,13 +85,21 @@ fn run(dir: &std::path::Path, args: &[&str]) -> Value {
         .arg(dir.join("cache"))
         .assert()
         .success();
-    serde_json::from_slice(&out.get_output().stdout).unwrap()
+    let out = out.get_output();
+    (
+        serde_json::from_slice(&out.stdout).unwrap(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn run(dir: &std::path::Path, args: &[&str]) -> Value {
+    run_with_stderr(dir, args).0
 }
 
 #[test]
 fn reads_checks_caches_and_lists() {
     let dir = tempfile::tempdir().unwrap();
-    let url = serve(vec![answer()]);
+    let url = serve(vec![notes(), scenarios()]);
     fs::write(
         dir.path().join("config.toml"),
         format!(
@@ -91,12 +111,14 @@ fn reads_checks_caches_and_lists() {
     fs::write(&file, SOURCE).unwrap();
     let file = file.to_str().unwrap();
 
-    let first = run(dir.path(), &["read", file, "--func", "Copy"]);
+    let (first, stderr) =
+        run_with_stderr(dir.path(), &["read", file, "--func", "Copy", "--progress"]);
+    assert!(stderr.contains("line 6: calls helper"), "{stderr}");
     assert_eq!(first["from_cache"], false);
     assert_eq!(first["function"]["enclosing"], "C");
     let r = &first["reading"];
     assert_eq!(r["model"], "test-model");
-    assert_eq!(r["prompt"], "v2-japanese");
+    assert_eq!(r["prompt"], "v3-japanese");
     assert_eq!(r["demoted"], 1, "the false fact on line 5 is demoted");
     assert_eq!(r["dropped"], 1, "the note on line 42 is dropped");
     let notes = r["notes"].as_array().unwrap();
@@ -107,12 +129,25 @@ fn reads_checks_caches_and_lists() {
         notes[1]["basis"],
         json!({ "kind": "fact", "call": "helper" })
     );
-    assert_eq!(r["scenarios"][0]["kind"], "boundary");
+    assert!(r["scenarios"].is_null(), "scenarios wait to be asked for");
+
+    // Scenarios are a second request; the notes come from the cache.
+    let sc = run(dir.path(), &["scenarios", file, "--func", "Copy"]);
+    let s = &sc["reading"]["scenarios"][0];
+    assert_eq!(s["kind"], "boundary");
+    assert_eq!(
+        s["steps"].as_array().unwrap().len(),
+        1,
+        "the step on line 40 is dropped"
+    );
+    assert_eq!(sc["reading"]["notes"], first["reading"]["notes"]);
 
     // The server has stopped; this can only succeed from the cache.
     let second = run(dir.path(), &["read", file, "--line", "6"]);
     assert_eq!(second["from_cache"], true);
-    assert_eq!(second["reading"], first["reading"]);
+    assert_eq!(second["reading"], sc["reading"]);
+    let again = run(dir.path(), &["scenarios", file, "--line", "6"]);
+    assert_eq!(again["from_cache"], true);
 
     let listed = run(dir.path(), &["cached", file]);
     let names: Vec<_> = listed["analysis"]["functions"]

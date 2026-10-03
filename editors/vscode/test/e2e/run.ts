@@ -10,33 +10,39 @@ import { runTests } from "@vscode/test-electron";
 const SOURCE =
   "package p\n\ntype C struct{ n int }\n\nfunc (c *C) Inc() {\n\tc.n = add(c.n, 1)\n}\n\nfunc add(a, b int) int { return a + b }\n";
 
-function answerFor(user: string): string {
-  const content = user.includes("FUNCTION: Inc")
-    ? {
-        notes: [
-          { line: 6, text: "calls add", detail: "adds one", assumptions: [], basis: { kind: "fact", call: "add" } },
-        ],
-        scenarios: [
-          {
-            kind: "concurrent",
-            title: "two Inc at once",
-            input: "two goroutines",
-            steps: [
-              { line: 6, what: "both read c.n" },
-              { line: 7, what: "both return" },
-            ],
-            outcome: "one increment is lost",
-            assumptions: ["no lock"],
-          },
-        ],
-      }
-    : {
-        notes: [
-          { line: 9, text: "returns the sum", detail: "", assumptions: [], basis: { kind: "inference", call: null } },
-        ],
-        scenarios: [],
-      };
-  return JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(content) } }] });
+/**
+ * The answer to one request as the pieces of a streamed response; `null`
+ * is a pause. The notes of Inc pause after the first note, so the editor
+ * shows it on its own before the second arrives.
+ */
+function answerFor(task: string, user: string): (string | null)[] {
+  if (task === "function_scenarios") {
+    const content = {
+      scenarios: [
+        {
+          kind: "concurrent",
+          title: "two Inc at once",
+          input: "two goroutines",
+          steps: [
+            { line: 6, what: "both read c.n" },
+            { line: 7, what: "both return" },
+          ],
+          outcome: "one increment is lost",
+          assumptions: ["no lock"],
+        },
+      ],
+    };
+    return [JSON.stringify(content)];
+  }
+  if (user.includes("FUNCTION: Inc")) {
+    const first = { line: 5, text: "increments c.n", detail: "", assumptions: [], basis: { kind: "inference", call: null } };
+    const second = { line: 6, text: "calls add", detail: "adds one", assumptions: [], basis: { kind: "fact", call: "add" } };
+    return [`{"notes":[${JSON.stringify(first)},`, null, `${JSON.stringify(second)}]}`];
+  }
+  const content = {
+    notes: [{ line: 9, text: "returns the sum", detail: "", assumptions: [], basis: { kind: "inference", call: null } }],
+  };
+  return [JSON.stringify(content)];
 }
 
 function serveLlm(): Promise<{ url: string; close: () => void }> {
@@ -44,9 +50,23 @@ function serveLlm(): Promise<{ url: string; close: () => void }> {
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString()));
     req.on("end", () => {
-      const parsed = JSON.parse(body) as { messages: { content: string }[] };
-      res.setHeader("content-type", "application/json");
-      res.end(answerFor(parsed.messages[1]?.content ?? ""));
+      const parsed = JSON.parse(body) as {
+        messages: { content: string }[];
+        response_format: { json_schema: { name: string } };
+      };
+      const pieces = answerFor(parsed.response_format.json_schema.name, parsed.messages[1]?.content ?? "");
+      res.setHeader("content-type", "text/event-stream");
+      void (async () => {
+        for (const piece of pieces) {
+          if (piece === null) {
+            await new Promise((r) => setTimeout(r, 600));
+            continue;
+          }
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: piece }, finish_reason: null }] })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+        res.end("data: [DONE]\n\n");
+      })();
     });
   });
   return new Promise((resolve) => {

@@ -15,7 +15,12 @@ function M.set(bufnr, params, client_id)
   for _, h in ipairs(params.pending or {}) do
     pending[h] = true
   end
-  by_buf[bufnr] = { params = params, pending = pending, client_id = client_id }
+  -- Notes still arriving, by function hash.
+  local partial = {}
+  for _, p in ipairs(params.partial or {}) do
+    partial[p.functionHash] = p.notes
+  end
+  by_buf[bufnr] = { params = params, pending = pending, partial = partial, client_id = client_id }
 end
 
 function M.get(bufnr)

@@ -8,7 +8,25 @@ use serde_json::{Value, json};
 use crt_app::ExplainRequest;
 use crt_domain::{Basis, Draft, FactRef, Note, Scenario, ScenarioKind, Step, SymbolKind};
 
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
+
+/// The two questions asked about a function: its notes (asked when a file
+/// opens) and its scenarios (asked only on request).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Task {
+    Notes,
+    Scenarios,
+}
+
+impl Task {
+    /// The schema name sent with the request.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Task::Notes => "function_notes",
+            Task::Scenarios => "function_scenarios",
+        }
+    }
+}
 
 /// The cache-key form of the prompt: version, output language and, when
 /// extra request fields are set, a short digest of them (they change the
@@ -33,45 +51,53 @@ pub(crate) fn identity(
     format!("v{VERSION}-{lang}-x{:08x}", digest >> 32)
 }
 
-pub(crate) fn system(output_language: &str) -> String {
+pub(crate) fn system(task: Task, output_language: &str) -> String {
+    let job = match task {
+        Task::Notes => NOTES,
+        Task::Scenarios => SCENARIOS,
+    };
     format!(
         "You explain source code to a reader who is reading it in an editor. \
 You never run the code; you reason about how it behaves.
 
 Write in {output_language}.
 
-Produce two things for the one function you are given:
-
-1. notes: explanations attached to lines of that function.
-   - Use only line numbers shown in the numbered source.
-   - One note per line that does something worth knowing; skip braces and trivial lines.
-   - text: one short sentence (at most 80 characters) saying what a reader cannot see at a
-     glance: the purpose of the line, how it changes values, or what happens at edge values.
-     Do not restate the syntax ('defines the signature', 'returns the value', 'iterates').
-   - detail: a longer explanation for a hover, or an empty string.
-   - basis.kind = \"fact\" only when the note merely states that the line calls a function
-     listed under STRUCTURAL FACTS for that same line; then basis.call is that function's name.
-     Everything else is basis.kind = \"inference\" with basis.call = null.
-   - assumptions: what the explanation takes for granted (inputs, caller behaviour,
-     what an unseen function does). Empty when nothing is assumed.
-
-2. scenarios: how the function behaves on concrete inputs.
-   - At least one normal case.
-   - Boundary cases that matter for this code: empty, zero, negative, maximum, null/None/nil,
-     malformed input.
-   - Concurrent cases when the code touches state that two callers could share at once:
-     say which lines interleave and what goes wrong (lost update, data race, double submit).
-     Omit concurrent scenarios when nothing is shared.
-   - steps: the lines the input goes through, in order, each with what happens there.
-   - outcome: the result or failure.
-   - assumptions: what the scenario takes for granted.
+{job}
 
 Do not invent lines, functions or behaviour you cannot see; when you must guess, say so in
 assumptions."
     )
 }
 
-pub(crate) fn user(request: &ExplainRequest, output_language: &str) -> String {
+const NOTES: &str =
+    "Write notes for the one function you are given: explanations attached to its lines.
+- Use only line numbers shown in the numbered source.
+- One note per line that does something worth knowing; skip braces and trivial lines.
+- Write the notes in line order.
+- text: one short sentence (at most 80 characters) saying what a reader cannot see at a
+  glance: the purpose of the line, how it changes values, or what happens at edge values.
+  Do not restate the syntax ('defines the signature', 'returns the value', 'iterates').
+- detail: a longer explanation for a hover, or an empty string.
+- basis.kind = \"fact\" only when the note merely states that the line calls a function
+  listed under STRUCTURAL FACTS for that same line; then basis.call is that function's name.
+  Everything else is basis.kind = \"inference\" with basis.call = null.
+- assumptions: what the explanation takes for granted (inputs, caller behaviour,
+  what an unseen function does). Empty when nothing is assumed.";
+
+const SCENARIOS: &str =
+    "Write scenarios for the one function you are given: how it behaves on concrete inputs.
+- At least one normal case.
+- Boundary cases that matter for this code: empty, zero, negative, maximum, null/None/nil,
+  malformed input.
+- Concurrent cases when the code touches state that two callers could share at once:
+  say which lines interleave and what goes wrong (lost update, data race, double submit).
+  Omit concurrent scenarios when nothing is shared.
+- steps: the lines the input goes through, in order, each with what happens there. Use only
+  line numbers shown in the numbered source.
+- outcome: the result or failure.
+- assumptions: what the scenario takes for granted.";
+
+pub(crate) fn user(task: Task, request: &ExplainRequest, output_language: &str) -> String {
     let f = &request.function;
     let kind = match f.kind {
         SymbolKind::Method => "method",
@@ -111,79 +137,89 @@ pub(crate) fn user(request: &ExplainRequest, output_language: &str) -> String {
             out.push_str(&format!("--- {}{owner}\n{}\n", c.name, c.numbered_source));
         }
     }
+    let fields = match task {
+        Task::Notes => "text, detail, assumptions",
+        Task::Scenarios => "title, input, steps, outcome, assumptions",
+    };
     out.push_str(&format!(
-        "\nWrite every text field (text, detail, assumptions, title, input, steps, outcome) in {output_language}.\n"
+        "\nWrite every text field ({fields}) in {output_language}.\n"
     ));
     out
 }
 
-/// JSON Schema for the answer, in the strict subset (every property
-/// required, no extra properties).
-pub(crate) fn schema() -> Value {
+/// JSON Schema for the answer to `task`, in the strict subset (every
+/// property required, no extra properties).
+pub(crate) fn schema(task: Task) -> Value {
     let strings = json!({ "type": "array", "items": { "type": "string" } });
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["notes", "scenarios"],
-        "properties": {
-            "notes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["line", "text", "detail", "assumptions", "basis"],
-                    "properties": {
-                        "line": { "type": "integer" },
-                        "text": { "type": "string" },
-                        "detail": { "type": "string" },
-                        "assumptions": strings,
-                        "basis": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["kind", "call"],
-                            "properties": {
-                                "kind": { "type": "string", "enum": ["fact", "inference"] },
-                                "call": { "type": ["string", "null"] }
-                            }
+    let (key, items) = match task {
+        Task::Notes => (
+            "notes",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["line", "text", "detail", "assumptions", "basis"],
+                "properties": {
+                    "line": { "type": "integer" },
+                    "text": { "type": "string" },
+                    "detail": { "type": "string" },
+                    "assumptions": strings,
+                    "basis": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "call"],
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["fact", "inference"] },
+                            "call": { "type": ["string", "null"] }
                         }
                     }
                 }
-            },
-            "scenarios": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["kind", "title", "input", "steps", "outcome", "assumptions"],
-                    "properties": {
-                        "kind": { "type": "string", "enum": ["normal", "boundary", "concurrent"] },
-                        "title": { "type": "string" },
-                        "input": { "type": "string" },
-                        "steps": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["line", "what"],
-                                "properties": {
-                                    "line": { "type": "integer" },
-                                    "what": { "type": "string" }
-                                }
+            }),
+        ),
+        Task::Scenarios => (
+            "scenarios",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title", "input", "steps", "outcome", "assumptions"],
+                "properties": {
+                    "kind": { "type": "string", "enum": ["normal", "boundary", "concurrent"] },
+                    "title": { "type": "string" },
+                    "input": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["line", "what"],
+                            "properties": {
+                                "line": { "type": "integer" },
+                                "what": { "type": "string" }
                             }
-                        },
-                        "outcome": { "type": "string" },
-                        "assumptions": strings
-                    }
+                        }
+                    },
+                    "outcome": { "type": "string" },
+                    "assumptions": strings
                 }
-            }
-        }
+            }),
+        ),
+    };
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [key],
+        "properties": { key: { "type": "array", "items": items } }
     })
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Answer {
+struct NotesAnswer {
     notes: Vec<AnswerNote>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenariosAnswer {
     scenarios: Vec<AnswerScenario>,
 }
 
@@ -256,51 +292,64 @@ fn unescape_all(v: Vec<String>) -> Vec<String> {
     v.into_iter().map(unescape).collect()
 }
 
-/// Parses the model's JSON into a draft. A "fact" without a call name is
-/// treated as an inference; the domain checker verifies the rest.
-pub(crate) fn parse(content: &str) -> Result<Draft, String> {
-    let answer: Answer = serde_json::from_str(content).map_err(|e| e.to_string())?;
+/// Parses the model's notes answer into a draft. A "fact" without a call
+/// name is treated as an inference; the domain checker verifies the rest.
+pub(crate) fn parse_notes(content: &str) -> Result<Draft, String> {
+    let answer: NotesAnswer = serde_json::from_str(content).map_err(|e| e.to_string())?;
     Ok(Draft {
-        notes: answer
-            .notes
-            .into_iter()
-            .map(|n| Note {
-                line: n.line,
-                text: unescape(n.text),
-                detail: Some(unescape(n.detail)).filter(|d| !d.trim().is_empty()),
-                assumptions: unescape_all(n.assumptions),
-                basis: match (n.basis.kind, n.basis.call) {
-                    (AnswerBasisKind::Fact, Some(name)) if !name.is_empty() => {
-                        Basis::Fact(FactRef::Call { name })
-                    }
-                    _ => Basis::Inference,
-                },
-            })
-            .collect(),
-        scenarios: answer
-            .scenarios
-            .into_iter()
-            .map(|s| Scenario {
-                kind: match s.kind {
-                    AnswerScenarioKind::Normal => ScenarioKind::Normal,
-                    AnswerScenarioKind::Boundary => ScenarioKind::Boundary,
-                    AnswerScenarioKind::Concurrent => ScenarioKind::Concurrent,
-                },
-                title: unescape(s.title),
-                input: unescape(s.input),
-                steps: s
-                    .steps
-                    .into_iter()
-                    .map(|st| Step {
-                        line: st.line,
-                        what: unescape(st.what),
-                    })
-                    .collect(),
-                outcome: unescape(s.outcome),
-                assumptions: unescape_all(s.assumptions),
-            })
-            .collect(),
+        notes: answer.notes.into_iter().map(note).collect(),
     })
+}
+
+/// One note object as the model wrote it, e.g. while the answer is still
+/// arriving.
+pub(crate) fn parse_note(object: &str) -> Result<Note, String> {
+    serde_json::from_str::<AnswerNote>(object)
+        .map(note)
+        .map_err(|e| e.to_string())
+}
+
+fn note(n: AnswerNote) -> Note {
+    Note {
+        line: n.line,
+        text: unescape(n.text),
+        detail: Some(unescape(n.detail)).filter(|d| !d.trim().is_empty()),
+        assumptions: unescape_all(n.assumptions),
+        basis: match (n.basis.kind, n.basis.call) {
+            (AnswerBasisKind::Fact, Some(name)) if !name.is_empty() => {
+                Basis::Fact(FactRef::Call { name })
+            }
+            _ => Basis::Inference,
+        },
+    }
+}
+
+/// Parses the model's scenarios answer.
+pub(crate) fn parse_scenarios(content: &str) -> Result<Vec<Scenario>, String> {
+    let answer: ScenariosAnswer = serde_json::from_str(content).map_err(|e| e.to_string())?;
+    Ok(answer
+        .scenarios
+        .into_iter()
+        .map(|s| Scenario {
+            kind: match s.kind {
+                AnswerScenarioKind::Normal => ScenarioKind::Normal,
+                AnswerScenarioKind::Boundary => ScenarioKind::Boundary,
+                AnswerScenarioKind::Concurrent => ScenarioKind::Concurrent,
+            },
+            title: unescape(s.title),
+            input: unescape(s.input),
+            steps: s
+                .steps
+                .into_iter()
+                .map(|st| Step {
+                    line: st.line,
+                    what: unescape(st.what),
+                })
+                .collect(),
+            outcome: unescape(s.outcome),
+            assumptions: unescape_all(s.assumptions),
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -310,8 +359,8 @@ mod tests {
     #[test]
     fn identity_folds_the_output_language_into_a_safe_token() {
         let none = serde_json::Map::new();
-        assert_eq!(identity("Japanese", &none), "v2-japanese");
-        assert_eq!(identity("pt-BR", &none), "v2-ptbr");
+        assert_eq!(identity("Japanese", &none), "v3-japanese");
+        assert_eq!(identity("pt-BR", &none), "v3-ptbr");
         let mut off = serde_json::Map::new();
         off.insert(
             "chat_template_kwargs".into(),
@@ -323,23 +372,20 @@ mod tests {
             serde_json::json!({ "enable_thinking": true }),
         );
         let (a, b) = (identity("Japanese", &off), identity("Japanese", &on));
-        assert!(a.starts_with("v2-japanese-x"), "{a}");
+        assert!(a.starts_with("v3-japanese-x"), "{a}");
         assert_ne!(a, b, "different request options are different readings");
         assert_eq!(a, identity("Japanese", &off), "stable");
     }
 
     #[test]
-    fn parses_an_answer_and_treats_a_nameless_fact_as_inference() {
+    fn parses_notes_and_treats_a_nameless_fact_as_inference() {
         let content = r#"{
           "notes": [
             {"line": 3, "text": "calls x", "detail": "", "assumptions": [], "basis": {"kind": "fact", "call": "x"}},
             {"line": 4, "text": "?", "detail": "long", "assumptions": ["a"], "basis": {"kind": "fact", "call": null}}
-          ],
-          "scenarios": [
-            {"kind": "boundary", "title": "empty", "input": "\"\"", "steps": [{"line": 3, "what": "returns"}], "outcome": "ok", "assumptions": []}
           ]
         }"#;
-        let draft = parse(content).unwrap();
+        let draft = parse_notes(content).unwrap();
         assert_eq!(
             draft.notes[0].basis,
             Basis::Fact(FactRef::Call { name: "x".into() })
@@ -347,25 +393,44 @@ mod tests {
         assert_eq!(draft.notes[0].detail, None);
         assert_eq!(draft.notes[1].basis, Basis::Inference);
         assert_eq!(draft.notes[1].detail.as_deref(), Some("long"));
-        assert_eq!(draft.scenarios[0].kind, ScenarioKind::Boundary);
+    }
+
+    #[test]
+    fn parses_scenarios() {
+        let content = r#"{"scenarios": [
+            {"kind": "boundary", "title": "empty", "input": "\"\"", "steps": [{"line": 3, "what": "returns"}], "outcome": "ok", "assumptions": []}
+        ]}"#;
+        let s = parse_scenarios(content).unwrap();
+        assert_eq!(s[0].kind, ScenarioKind::Boundary);
+        assert_eq!(s[0].steps[0].line, 3);
     }
 
     #[test]
     fn html_entities_from_the_model_become_characters() {
-        let content = r#"{"notes":[{"line":1,"text":"takes &amp;str","detail":"a &lt; b &amp;&amp; c","assumptions":["x &gt; 0"],"basis":{"kind":"inference","call":null}}],
-          "scenarios":[{"kind":"normal","title":"&quot;a&quot;","input":"&#39;x&#39;","steps":[{"line":1,"what":"&amp;mut"}],"outcome":"ok","assumptions":[]}]}"#;
-        let d = parse(content).unwrap();
+        let notes = r#"{"notes":[{"line":1,"text":"takes &amp;str","detail":"a &lt; b &amp;&amp; c","assumptions":["x &gt; 0"],"basis":{"kind":"inference","call":null}}]}"#;
+        let d = parse_notes(notes).unwrap();
         assert_eq!(d.notes[0].text, "takes &str");
         assert_eq!(d.notes[0].detail.as_deref(), Some("a < b && c"));
         assert_eq!(d.notes[0].assumptions[0], "x > 0");
-        assert_eq!(d.scenarios[0].title, "\"a\"");
-        assert_eq!(d.scenarios[0].input, "'x'");
-        assert_eq!(d.scenarios[0].steps[0].what, "&mut");
+        let scenarios = r#"{"scenarios":[{"kind":"normal","title":"&quot;a&quot;","input":"&#39;x&#39;","steps":[{"line":1,"what":"&amp;mut"}],"outcome":"ok","assumptions":[]}]}"#;
+        let s = parse_scenarios(scenarios).unwrap();
+        assert_eq!(s[0].title, "\"a\"");
+        assert_eq!(s[0].input, "'x'");
+        assert_eq!(s[0].steps[0].what, "&mut");
     }
 
     #[test]
     fn rejects_an_answer_with_extra_or_missing_fields() {
-        assert!(parse(r#"{"notes": []}"#).is_err());
-        assert!(parse(r#"{"notes": [], "scenarios": [], "extra": 1}"#).is_err());
+        assert!(parse_notes(r#"{}"#).is_err());
+        assert!(parse_notes(r#"{"notes": [], "scenarios": []}"#).is_err());
+        assert!(parse_scenarios(r#"{"notes": []}"#).is_err());
+    }
+
+    #[test]
+    fn each_task_asks_only_for_its_own_part() {
+        assert_eq!(schema(Task::Notes)["required"], json!(["notes"]));
+        assert_eq!(schema(Task::Scenarios)["required"], json!(["scenarios"]));
+        assert!(!system(Task::Notes, "English").contains("Concurrent cases"));
+        assert!(system(Task::Scenarios, "English").contains("Concurrent cases"));
     }
 }

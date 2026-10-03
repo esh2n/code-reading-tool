@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
 crt-html = { path = "../crt-html" }
 crt-llm = { path = "../crt-llm" }
 crt-lsp = { path = "../crt-lsp" }

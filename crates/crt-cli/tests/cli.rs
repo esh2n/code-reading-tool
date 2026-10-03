@@ -30,7 +30,7 @@ fn analyze_prints_wire_json_for_one_function() {
         .assert()
         .success();
     let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
-    assert_eq!(json["wire_version"], 1);
+    assert_eq!(json["wire_version"], 2);
     assert_eq!(json["language"], "go");
     assert_eq!(json["has_syntax_error"], false);
     assert_eq!(json["functions"].as_array().unwrap().len(), 1);
