@@ -131,6 +131,12 @@ the release's SHA-256), or put `crt` on your `PATH`.
 Notes appear one by one while the model writes them. Scenarios are written
 only when asked for, so opening a file costs one short request per function.
 
+When you edit a function, its notes stay, marked `(old)`, until it is
+explained again. That happens when you save the file, so half-written code
+is never sent to the model; `read_on = "idle"` in `setup()` (VS Code:
+`codeReading.readOn`) explains it two seconds after typing stops instead.
+`:CrRead` explains it at once, saved or not.
+
 A local model that serves one request at a time gains nothing from parallel
 reads: pass `max_parallel = 1` to `setup()`.
 
@@ -147,7 +153,7 @@ unless you ask; hovering still shows a line's explanation. The choice is
 kept in the `codeReading.enabled` setting. Commands: *Code Reading: Explain
 Function at Cursor*, *Show Scenario*, *Open Configuration*, *Turn
 Explanations On or Off*. Settings: `codeReading.enabled`,
-`codeReading.configPath`, `codeReading.cacheDir`, `codeReading.autoRead`,
+`codeReading.readOn`, `codeReading.configPath`, `codeReading.cacheDir`, `codeReading.autoRead`,
 `codeReading.maxParallel`, `codeReading.serverPath`.
 
 ## Develop
