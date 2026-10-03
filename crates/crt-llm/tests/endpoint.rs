@@ -7,9 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crt_app::{ExplainError, ExplainRequest, Explainer};
-use crt_domain::{
-    Basis, Call, ContentHash, Function, LanguageId, LineFacts, Span, SymbolKind,
-};
+use crt_domain::{Basis, Call, ContentHash, Function, LanguageId, LineFacts, Span, SymbolKind};
 use crt_llm::{EndpointConfig, LlmConfig, OpenAiCompatible};
 use serde_json::{Value, json};
 
