@@ -67,13 +67,13 @@ function updateStatus(): void {
   }
   const writing = (latest.get(doc.uri.toString())?.pending.length ?? 0) > 0;
   if (!enabled) {
-    status.text = "$(eye-closed) Code Reading";
+    status.text = "Code Reading: off";
     status.tooltip = "Explanations are off. Click to turn them on.";
   } else if (writing) {
-    status.text = "$(sync~spin) Code Reading";
+    status.text = "Code Reading: writing…";
     status.tooltip = "Writing explanations for the code in view. Click to turn explanations off.";
   } else {
-    status.text = "$(eye) Code Reading";
+    status.text = "Code Reading: on";
     status.tooltip = "Explanations are on. Click to turn them off.";
   }
   status.show();

@@ -133,7 +133,7 @@ For a statusline, `require("code-reading").status()` returns `crt on`,
 ### VS Code
 
 Install the `.vsix` for your platform from a release (it contains `crt`).
-The status bar shows whether explanations are on; click it to switch. Off
+The status bar shows `Code Reading: on`, `off` or `writing…`; click it to switch. Off
 means nothing at line ends and no model calls unless you ask. The choice is
 kept in the `codeReading.enabled` setting. Commands: *Code Reading: Explain
 Function at Cursor*, *Show Scenario*, *Open Configuration*, *Turn

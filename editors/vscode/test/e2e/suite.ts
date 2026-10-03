@@ -96,12 +96,12 @@ export async function run(): Promise<void> {
   // The status bar item turns explanations off and on; the choice is a
   // setting, so it survives a restart.
   await vscode.window.showTextDocument(doc);
-  assert.match(api.statusText() ?? "", /\$\(eye\) Code Reading/);
+  assert.match(api.statusText() ?? "", /^Code Reading: (on|writing…)$/);
   await vscode.commands.executeCommand("codeReading.toggle");
-  await until(() => (api.statusText()?.includes("eye-closed") ? true : undefined), 5000, "explanations off");
+  await until(() => (api.statusText() === "Code Reading: off" ? true : undefined), 5000, "explanations off");
   assert.equal(vscode.workspace.getConfiguration("codeReading").get("enabled"), false);
   await vscode.commands.executeCommand("codeReading.toggle");
-  await until(() => (api.statusText()?.includes("$(eye)") ? true : undefined), 5000, "explanations on");
+  await until(() => (api.statusText() === "Code Reading: on" ? true : undefined), 5000, "explanations on");
 
   // The configuration file opens from a command.
   await vscode.commands.executeCommand("codeReading.openConfig");
