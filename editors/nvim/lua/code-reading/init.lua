@@ -146,6 +146,17 @@ function M.setup(opts)
     handlers = { ["codeReading/fileReadings"] = on_file_readings },
   })
   vim.lsp.enable("crt")
+  -- enable() attaches on FileType; buffers opened before setup() ran (a
+  -- lazy-loaded plugin, a file given on the command line) need a nudge.
+  local wanted = {}
+  for _, ft in ipairs(M.config.filetypes) do
+    wanted[ft] = true
+  end
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bufnr) and wanted[vim.bo[bufnr].filetype] then
+      pcall(vim.api.nvim_exec_autocmds, "FileType", { group = "nvim.lsp.enable", buffer = bufnr })
+    end
+  end
 
   local group = vim.api.nvim_create_augroup("code-reading", { clear = true })
   vim.api.nvim_create_autocmd("LspAttach", {
