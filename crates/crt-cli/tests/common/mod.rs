@@ -4,6 +4,8 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -43,8 +45,16 @@ fn answer_for(task: &str, user: &str) -> Vec<Option<String>> {
 /// Answers every request by looking at which function and which part
 /// (notes or scenarios) it is about. Returns the base URL.
 pub fn serve_llm() -> String {
+    serve_llm_counting().0
+}
+
+/// [`serve_llm`], also counting the requests for notes (not scenarios).
+#[allow(dead_code)] // not every test binary uses it
+pub fn serve_llm_counting() -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let notes_requests = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&notes_requests);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -63,12 +73,13 @@ pub fn serve_llm() -> String {
             reader.read_exact(&mut buf).unwrap();
             let req: Value = serde_json::from_slice(&buf).unwrap();
             assert_eq!(req["stream"], true);
-            let pieces = answer_for(
-                req["response_format"]["json_schema"]["name"]
-                    .as_str()
-                    .unwrap(),
-                req["messages"][1]["content"].as_str().unwrap(),
-            );
+            let task = req["response_format"]["json_schema"]["name"]
+                .as_str()
+                .unwrap();
+            if task == "function_notes" {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+            let pieces = answer_for(task, req["messages"][1]["content"].as_str().unwrap());
             thread::spawn(move || {
                 stream
                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
@@ -88,5 +99,5 @@ pub fn serve_llm() -> String {
             });
         }
     });
-    url
+    (url, notes_requests)
 }

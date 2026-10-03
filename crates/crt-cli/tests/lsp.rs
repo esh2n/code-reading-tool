@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 mod common;
-use common::{SOURCE, serve_llm};
+use common::{SOURCE, serve_llm, serve_llm_counting};
 
 struct Lsp {
     child: Child,
@@ -302,4 +302,49 @@ fn without_configuration_facts_still_arrive_and_reads_explain_why() {
             .unwrap()
             .contains("[llm]")
     );
+}
+
+#[test]
+fn scenarios_asked_while_the_notes_are_being_written_wait_for_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, notes_requests) = serve_llm_counting();
+    fs::write(
+        dir.path().join("config.toml"),
+        format!("[llm]\nbase_url = \"{url}\"\nmodel = \"m\"\n"),
+    )
+    .unwrap();
+    let path = dir.path().join("p.go");
+    fs::write(&path, SOURCE).unwrap();
+    let uri = format!("file://{}", path.display());
+
+    let mut lsp = Lsp::start(dir.path());
+    lsp.request(
+        "initialize",
+        json!({ "processId": null, "rootUri": null, "capabilities": {},
+                "initializationOptions": { "autoRead": true, "maxParallel": 2 } }),
+    );
+    lsp.notify("initialized", json!({}));
+    lsp.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": uri, "languageId": "go", "version": 1, "text": SOURCE } }),
+    );
+    lsp.wait(file_readings);
+    // The notes of Inc take over half a second; ask for its scenarios
+    // while they are still being written.
+    lsp.notify(
+        "codeReading/visibleRange",
+        json!({ "uri": uri, "startLine": 0, "endLine": 20 }),
+    );
+    lsp.wait(|m| {
+        file_readings(m)
+            && m["params"]["partial"]
+                .as_array()
+                .is_some_and(|p| !p.is_empty())
+    });
+    let sc = lsp.request("codeReading/scenarios", json!({ "uri": uri, "line": 4 }));
+    assert_eq!(sc["reading"]["notes"].as_array().unwrap().len(), 2);
+    assert!(sc["reading"]["scenarios"].is_array());
+    // Inc and add: one notes request each (add's finished before the
+    // reply), none repeated for the scenarios.
+    assert_eq!(notes_requests.load(std::sync::atomic::Ordering::SeqCst), 2);
 }

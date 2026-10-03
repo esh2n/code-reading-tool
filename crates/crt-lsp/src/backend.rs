@@ -74,6 +74,11 @@ struct Inner {
     /// The explainer's authors when auto-read last looked. A change means
     /// the configuration changed, and earlier failures may not hold.
     authors_seen: Mutex<Vec<crt_domain::Author>>,
+    /// One lock per function being read: an auto-read, an explicit read
+    /// and a scenarios request for the same function run one after
+    /// another, so the later ones find the notes in the cache instead of
+    /// asking the model again.
+    function_locks: Mutex<HashMap<ReadKey, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 #[derive(Clone)]
@@ -100,6 +105,28 @@ struct Partial {
     /// The function's first line when the read started.
     started_at: usize,
     notes: Vec<Note>,
+}
+
+/// A turn to read one function; see `Inner::function_locks`. Dropping it
+/// also forgets the lock when nobody else is waiting for it.
+struct FunctionTurn {
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    inner: Arc<Inner>,
+    key: ReadKey,
+}
+
+impl Drop for FunctionTurn {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        let mut locks = lock(&self.inner.function_locks);
+        // Only this map holds it now: no one is reading or waiting.
+        if locks
+            .get(&self.key)
+            .is_some_and(|l| Arc::strong_count(l) == 1)
+        {
+            locks.remove(&self.key);
+        }
+    }
 }
 
 /// Removes an in-flight key when the read ends, however it ends.
@@ -134,6 +161,7 @@ impl Backend {
                 publishing: tokio::sync::Mutex::new(()),
                 failed: Mutex::new(HashMap::new()),
                 authors_seen: Mutex::new(Vec::new()),
+                function_locks: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -280,6 +308,7 @@ impl Backend {
         refresh: bool,
     ) -> Result<crt_app::FunctionReading, String> {
         let explainer = self.explainer()?;
+        let _turn = self.function_turn(doc, function).await;
         let services = self.inner.services.clone();
         let (path, text) = (doc.path.clone(), Arc::clone(&doc.text));
         let read_key: ReadKey = (doc.uri.as_str().to_string(), function.hash.to_string());
@@ -338,6 +367,22 @@ impl Backend {
         result?
     }
 
+    /// Waits until no other read of `function` in `doc` is running, and
+    /// holds that turn until the guard is dropped.
+    async fn function_turn(&self, doc: &Doc, function: &Function) -> FunctionTurn {
+        let key: ReadKey = (doc.uri.as_str().to_string(), function.hash.to_string());
+        let lock = Arc::clone(
+            lock(&self.inner.function_locks)
+                .entry(key.clone())
+                .or_default(),
+        );
+        FunctionTurn {
+            guard: Some(lock.lock_owned().await),
+            inner: Arc::clone(&self.inner),
+            key,
+        }
+    }
+
     /// Reads one function's scenarios, asking the model if needed.
     async fn read_scenarios(
         &self,
@@ -346,6 +391,7 @@ impl Backend {
         refresh: bool,
     ) -> Result<crt_app::FunctionReading, String> {
         let explainer = self.explainer()?;
+        let _turn = self.function_turn(doc, function).await;
         let services = self.inner.services.clone();
         let (path, text) = (doc.path.clone(), Arc::clone(&doc.text));
         let start_line = function.span.start_line;
