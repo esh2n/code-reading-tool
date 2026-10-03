@@ -1,0 +1,482 @@
+<title>Code Reading Tool Research Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a single reading column with a sticky section index; evidence marks are colored chips; tables scroll on their own. */
+:root {
+  --bg: #f6f5f2; --surface: #ffffff; --fg: #1e2320; --muted: #5c6660; --line: #d9ddd7;
+  --accent: #2a6f97; --accent-soft: #e3eef5;
+  --mark-direct: #1d5e3c; --mark-direct-bg: #dff2e6;
+  --mark-summary: #7a5a12; --mark-summary-bg: #f7ecd0;
+  --mark-measured: #1f4f8a; --mark-measured-bg: #dde9f8;
+  --mark-infer: #6b3a7a; --mark-infer-bg: #efe2f5;
+  --body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181a; --surface: #1c2124; --fg: #e4e8e6; --muted: #9aa5a0; --line: #2d3539;
+    --accent: #7fb8dc; --accent-soft: #1f2d36;
+    --mark-direct: #9fdcb5; --mark-direct-bg: #1e3a2a; --mark-summary: #e8c877; --mark-summary-bg: #3d3116;
+    --mark-measured: #a9c7ee; --mark-measured-bg: #1d2f48; --mark-infer: #d8b6e6; --mark-infer-bg: #3a2644;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181a; --surface: #1c2124; --fg: #e4e8e6; --muted: #9aa5a0; --line: #2d3539;
+  --accent: #7fb8dc; --accent-soft: #1f2d36;
+  --mark-direct: #9fdcb5; --mark-direct-bg: #1e3a2a; --mark-summary: #e8c877; --mark-summary-bg: #3d3116;
+  --mark-measured: #a9c7ee; --mark-measured-bg: #1d2f48; --mark-infer: #d8b6e6; --mark-infer-bg: #3a2644;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15.5px; line-height: 1.8; }
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 90px; }
+h1 { font-size: 1.9rem; line-height: 1.35; margin: 0 0 8px; text-wrap: balance; }
+h2 { font-size: 1.35rem; margin: 56px 0 14px; padding-top: 14px; border-top: 2px solid var(--line); text-wrap: balance; scroll-margin-top: 16px; }
+h3 { font-size: 1.08rem; margin: 30px 0 8px; text-wrap: balance; }
+p { margin: 0 0 12px; max-width: 72ch; }
+ul, ol { margin: 0 0 12px; padding-left: 1.4em; max-width: 72ch; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: .92rem; margin-bottom: 20px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: .9rem; margin: 0 0 20px; }
+.m { font-family: var(--mono); font-size: .78rem; padding: 1px 7px; border-radius: 4px; white-space: nowrap; vertical-align: 1px; }
+.m.d { background: var(--mark-direct-bg); color: var(--mark-direct); }
+.m.s { background: var(--mark-summary-bg); color: var(--mark-summary); }
+.m.t { background: var(--mark-measured-bg); color: var(--mark-measured); }
+.m.i { background: var(--mark-infer-bg); color: var(--mark-infer); }
+code { font-family: var(--mono); font-size: .86em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+.toc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin: 0 0 24px; }
+.toc ol { margin: 0; padding-left: 1.3em; columns: 2; column-gap: 24px; }
+.toc a { color: var(--fg); text-decoration: none; }
+.toc a:hover, .toc a:focus-visible { color: var(--accent); outline: none; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.tw { overflow-x: auto; margin: 0 0 16px; }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: .9rem; line-height: 1.55; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+th { font-size: .78rem; letter-spacing: .05em; color: var(--muted); }
+td:first-child { font-weight: 500; }
+blockquote { margin: 0 0 12px; padding: 8px 14px; border-left: 3px solid var(--accent); background: var(--surface); color: var(--muted); font-size: .92rem; max-width: 72ch; }
+.key { background: var(--accent-soft); border-radius: 10px; padding: 14px 18px; margin: 0 0 16px; max-width: 76ch; }
+.key b { color: var(--accent); }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+  <h1>調査報告（統合版）：エディタ内でコードの「動き」を解説する道具の技術選定</h1>
+  <p class="meta">2026-10-03。8 本の調査記録（docs/research/）を 1 つにまとめたもの。各記録には URL 付きの根拠があり、ここには結論と主要な根拠だけを載せる。</p>
+
+  <div class="legend">
+    <span><span class="m d">直</span> 一次ソース（公式文書・ソースコード・GitHub や crates.io の API）を直接読んだ</span>
+    <span><span class="m s">要約</span> Web 取得の要約を通した（言い換えの可能性）</span>
+    <span><span class="m t">測</span> この調査で実際に測った（Mac 1 台）</span>
+    <span><span class="m i">推</span> 証拠からの推論、未検証</span>
+  </div>
+
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#terms">用語</a></li>
+      <li><a href="#scope">調査の問いと範囲</a></li>
+      <li><a href="#a">A. 似た製品はどう作られているか</a></li>
+      <li><a href="#b">B. 多言語のコード構造をどこから取るか</a></li>
+      <li><a href="#c">C. Neovim の拡張をどう作ると速いか</a></li>
+      <li><a href="#d">D. VS Code の拡張をどう作ると速いか</a></li>
+      <li><a href="#e">E. バックエンドを何の言語で書くか</a></li>
+      <li><a href="#open">「ファイルを開いたときに出る」の実現</a></li>
+      <li><a href="#f">F. 実行して裏付けるとしたら</a></li>
+      <li><a href="#g">G. LLM の推論はどれくらい当たるか</a></li>
+      <li><a href="#map">結論の対応表</a></li>
+      <li><a href="#none">見つからなかった前例</a></li>
+      <li><a href="#decide">裁定事項</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="terms">0. 用語</h2>
+  <p>この報告で使う用語。初出でも説明するが、まとめて先に置く。</p>
+  <div class="tw"><table>
+    <thead><tr><th>用語</th><th>意味</th></tr></thead>
+    <tbody>
+      <tr><td>エディタ拡張（プラグイン）</td><td>エディタの中で動く追加プログラム。VS Code では TypeScript で書く「拡張（extension）」、Neovim では Lua で書く「プラグイン」。</td></tr>
+      <tr><td>バックエンド</td><td>エディタの外で動く別プロセスのプログラム。エディタ拡張から呼ばれ、重い仕事（解析、LLM 呼び出し）を担う。この報告では「エンジン」とも書く。</td></tr>
+      <tr><td>JSON-RPC</td><td>プログラム同士が「関数名と引数」を JSON で送り合う通信の形式。</td></tr>
+      <tr><td>stdio</td><td>標準入出力。子プロセスとして起動したプログラムと、パイプで文字列をやり取りする経路。JSON-RPC over stdio は「子プロセスと stdio 経由で JSON-RPC を話す」こと。</td></tr>
+      <tr><td>LSP（Language Server Protocol）</td><td>エディタと「言語サーバー」（gopls、rust-analyzer、pyright など）が話すための、JSON-RPC 上の標準仕様。定義ジャンプ、補完、診断（エラーの下線）、hover（マウスを乗せたときの説明窓）などの要求と応答の形が決まっている。VS Code と Neovim は、この仕様で話す「クライアント」を本体に持つ。</td></tr>
+      <tr><td>独自メソッド（カスタムリクエスト）</td><td>LSP の仕様に無い要求を、同じ JSON-RPC の経路に足すこと。Copilot や rust-analyzer がやっている。</td></tr>
+      <tr><td>call hierarchy</td><td>LSP の機能の 1 つ。ある関数を「誰が呼んでいるか（incoming）」「何を呼んでいるか（outgoing）」を返す。</td></tr>
+      <tr><td>tree-sitter</td><td>プログラミング言語の構文解析ライブラリ。言語ごとの「文法」を読み込むと、コードを構文木（関数、引数、呼び出し、などの入れ子の木）にする。多言語対応で、Neovim 本体、GitHub、多くの AI コーディング製品が使う。</td></tr>
+      <tr><td>tags クエリ</td><td>tree-sitter の構文木から「定義（関数、クラス）」と「参照（呼び出し）」の位置を抜き出すための、言語ごとの問い合わせファイル（<code>.scm</code>）。</td></tr>
+      <tr><td>構文（syntax）と型（types）</td><td>tree-sitter が返すのは構文（どこが関数か）まで。「この呼び出しが実際にどの関数へ飛ぶか」を確定するには型の情報が要り、それは各言語のコンパイラや言語サーバーしか持たない。</td></tr>
+      <tr><td>virtual text / extmark</td><td>Neovim で、ファイルの中身を変えずに画面だけに文字を足す仕組み。extmark は位置の目印で、そこに virtual text（仮想の文字列）を付けられる。行末に付けるのが <code>eol</code>。</td></tr>
+      <tr><td>decoration</td><td>VS Code で、同じく画面だけに装飾（行末の文字、下線、色）を足す仕組み。</td></tr>
+      <tr><td>inlay hint</td><td>LSP の標準機能で、型や引数名を行の途中に薄く表示するもの。</td></tr>
+      <tr><td>wasm（WebAssembly）/ WASI</td><td>wasm はブラウザなどで動く中間コードの形式。WASI は wasm がファイルやプロセスなど OS の機能を使うための標準。Rust や Go を wasm に変換して、別の環境で動かせる。</td></tr>
+      <tr><td>cdylib / FFI</td><td>cdylib は Rust などで作った共有ライブラリ（.so / .dylib）。FFI は別の言語（ここでは Lua）からそれを直接呼ぶ仕組み。同じプロセスの中で動くので速いが、落ちるとエディタごと落ちる。</td></tr>
+      <tr><td>LuaJIT</td><td>Neovim が使う Lua の実行系。FFI 機能を持つ。</td></tr>
+      <tr><td>構造化出力（Structured Outputs）</td><td>LLM に「この JSON Schema に従った JSON で返せ」と強制する機能。</td></tr>
+      <tr><td>キャッシュの鍵</td><td>保存した結果を後で引き出すための識別子。鍵が同じなら同じ結果を返す。</td></tr>
+      <tr><td>race（データ競合）</td><td>複数の処理が同時に同じメモリに触り、片方が書き込むときに起きる不具合。Go の race detector は実行中にこれを検出する道具。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="scope">1. 調査の問いと範囲</h2>
+  <h3>要件（所有者と揃えたもの）</h3>
+  <ul>
+    <li>対象言語は多岐にわたる。固定の一覧ではない。言語を足すのに新しいコードを書きたくない。</li>
+    <li>解説の中身は「各行が何をするか」「具体的な値（境界値を含む）でどう動くか」「同時に来たら何が起きうるか」。<b>推論であり、実際には実行しない。</b></li>
+    <li>ファイルを開いたときに出る。リポジトリ全体の事前計算はしない。キャッシュは可。</li>
+    <li>出力先は VS Code、Neovim、静的 HTML。</li>
+    <li>配布する。他の人の環境で動く。</li>
+  </ul>
+  <h3>調べた問い</h3>
+  <div class="tw"><table>
+    <thead><tr><th>記号</th><th>問い</th><th>記録（docs/research/）</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td>似た製品はどう作られているか。複数エディタ・複数言語をどう扱い、開いたときに何をしているか</td><td>similar-products-architecture</td></tr>
+      <tr><td>B</td><td>多言語のコード構造（関数の範囲、呼び出し元）をどこから取るのが標準か</td><td>multi-language-structure</td></tr>
+      <tr><td>C</td><td>Neovim の拡張をどう作ると速いか（Lua、FFI、外部プロセス、wasm）</td><td>neovim-rendering-and-compute、nvim-plugin-architecture</td></tr>
+      <tr><td>D</td><td>VS Code の拡張をどう作ると速いか（描画、wasm、LSP か直接 API か）</td><td>vscode-extension-tech、editor-agnostic-backend</td></tr>
+      <tr><td>E</td><td>バックエンドを何の言語で書くか</td><td>backend-language、rust-cli-stack</td></tr>
+      <tr><td>F</td><td>実行して裏付けるとしたら何が要るか（要件から外れたが、情報として残す）</td><td>rust-cli-stack、nvim-plugin-architecture、multi-language-structure</td></tr>
+      <tr><td>G</td><td>LLM の推論はどれくらい当たるか</td><td>draft.md（元の草案の調査）</td></tr>
+    </tbody>
+  </table></div>
+  <h3>証拠の集め方</h3>
+  <p>公式文書、名前の知れた実践者、測定値、公開リポジトリの状態（スター数、最終更新）の 4 つの角度で集め、否定側の証拠（放棄、撤退、不具合報告）も同じ力で集めた。issue トラッカーは否定に偏り、ベンダーの文書は肯定に偏ることを前提に読む。</p>
+
+  <h2 id="a">2. 問い A：似た製品はどう作られているか</h2>
+  <h3>2.1 複数エディタに対応する製品は「バックエンドをエディタの外に出す」形に収束している</h3>
+  <div class="tw"><table>
+    <thead><tr><th>製品</th><th>バックエンドの共有方式</th><th>バックエンドの言語</th><th>出典</th></tr></thead>
+    <tbody>
+      <tr><td>GitHub Copilot</td><td>LSP + 多数の独自メッセージ。各 OS の単一バイナリ</td><td>TypeScript 由来、ネイティブ化済み</td><td><span class="m d">直</span> github/copilot-language-server-release</td></tr>
+      <tr><td>Sourcegraph Cody</td><td>独自の JSON-RPC（LSP ではない）。JetBrains と Neovim が同じプロセスを使う</td><td>TypeScript（Node で実行）</td><td><span class="m d">直</span> cody-public-snapshot の agent/README</td></tr>
+      <tr><td>Continue</td><td>独自メッセージ。TypeScript のコアを OS 別のバイナリにして、JetBrains は子プロセスとして起動</td><td>TypeScript</td><td><span class="m d">直</span> continuedev/continue の binary/README</td></tr>
+      <tr><td>Sourcery</td><td><code>sourcery</code> CLI が言語サーバー。VS Code と Zed が同じ CLI を呼ぶ</td><td>Python <span class="m i">推</span></td><td><span class="m d">直</span> sourcery-vscode</td></tr>
+      <tr><td>Windsurf</td><td>独自の <code>language_server</code> バイナリ</td><td>未確認</td><td><span class="m d">直</span> windsurf.nvim</td></tr>
+      <tr><td>Wallaby（行内に実行時の値を出す）</td><td>拡張のあるエディタ（VS Code、JetBrains、Visual Studio、Sublime）だけ。<b>Neovim・Vim・Zed・Emacs にはブラウザ UI</b></td><td>Node</td><td><span class="m s">要約</span> wallabyjs.com</td></tr>
+      <tr><td>CodeTour</td><td><code>.tour</code> という JSON ファイルを共有し、読む側はエディタごとに別実装</td><td>TypeScript</td><td><span class="m d">直</span> microsoft/codetour</td></tr>
+    </tbody>
+  </table></div>
+  <blockquote>Copilot の README の原文: 「The Copilot Language Server attempts to follow the LSP spec as closely as possible, but many custom messages are employed to support the unique features of Copilot.」 <span class="m d">直</span></blockquote>
+  <blockquote>Cody の agent の README の原文: 「There's no tool to automatically generate bindings for the Cody agent protocol. Currently, clients have to manually write bindings」「The protocol is subject to breaking changes without notice.」 <span class="m d">直</span> — 独自方式にすると、エディタごとに接続のコードを手書きすることになる、という実例。</blockquote>
+  <p>Continue はネイティブ依存（sqlite3、lancedb）を「need to download for each platform manually」と書いている <span class="m d">直</span>。配布の手間の実例。</p>
+
+  <h3>2.2 LSP を使わなかった製品は理由を書いていない</h3>
+  <p>Cody と Continue は LSP ではなく独自の JSON-RPC を選んだが、「LSP では足りないから」と書いた文書は見つからなかった。TypeScript で書いたコアを JetBrains や Neovim から使うため、という実装上の事情は読み取れる <span class="m i">推</span>。</p>
+
+  <h3>2.3 「ファイルを開いたときに行ごとの LLM 解説を出す」製品は見つからなかった</h3>
+  <p>近い用途の製品が開いたときに何をしているか:</p>
+  <div class="tw"><table>
+    <thead><tr><th>製品</th><th>開いたときの挙動</th><th>何をどこにキャッシュするか</th><th>対象の範囲</th></tr></thead>
+    <tbody>
+      <tr><td>GitLens（行末に git blame）</td><td><b>カーソル行だけ</b>に注釈。250 ms の待ち（debounce）の後に更新。途中でキャンセルできる</td><td>内部キャッシュ（鍵は未確認）</td><td>全ファイルは走査しない</td></tr>
+      <tr><td>Error Lens（行末にエラー）</td><td>言語サーバーから届いた診断を、届いた順に描く</td><td>無し</td><td>開いたファイルだけ</td></tr>
+      <tr><td>Copilot</td><td>起動が遅いので遅延読み込みを推奨。<code>didFocus</code> で「今見ている文書」をサーバーへ通知</td><td>補完の結果をクライアント側に保持。バイナリは版・OS・SHA-256 で管理</td><td>開いた文書だけ</td></tr>
+      <tr><td>Continue</td><td>補完の結果を SQLite に保存（鍵は入力のプレフィックス）。開いたファイル 20 件を文脈に使う</td><td>SQLite</td><td>開いたファイル 20 件</td></tr>
+      <tr><td>Sourcery</td><td>「review all of the Python, JavaScript, and TypeScript files you have open」 <span class="m d">直</span></td><td>文書なし</td><td>開いたファイルだけ</td></tr>
+      <tr><td>DeepWiki、Google Code Wiki</td><td>リポジトリ全体を事前に処理する</td><td>—</td><td>全リポジトリ（要件に反する）</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>「開いているファイルだけを対象にする」のが、事前計算型（DeepWiki）以外の共通の範囲。</li>
+    <li>キャッシュの鍵として確認できたのは「リクエストの内容（プレフィックス）」と「バイナリの版」だけ。<b>ファイルや関数の内容のハッシュを鍵にした解説結果のキャッシュは、前例が無い。</b></li>
+    <li>数秒〜数十秒かかる生成を、画面に見えている範囲から順に、できた部分から描く実装は、公開されたものの中に見つからなかった。</li>
+  </ul>
+
+  <h3>2.4 配布の運用（否定側の証拠を含む）</h3>
+  <ul>
+    <li>copilot.lua（Neovim 用、4,101★）は 2026-08 に、Node.js 同梱をやめて「75〜110 MB の単一バイナリをダウンロードし SHA-256 で検証する」方式を既定にした <span class="m d">直</span>。Node を利用者に要求する方式から離れた実例。</li>
+    <li>同じ copilot.lua に、社内 Windows 機でバイナリのダウンロードに失敗した報告（#739）、2 つの Neovim で 9 GB のメモリを使った報告（#667）がある <span class="m d">直</span>。配布するツールの実害の例。</li>
+    <li>撤退した製品: Cody の無料版と Pro は 2025-07 に終了、公開リポジトリは archived。Supermaven は 2025-11 に事業終了。Mintlify Writer は 2026-06 に deprecated。LightTable は archived。いずれも事業判断で、設計の失敗を示すものではない。</li>
+  </ul>
+
+  <h3>2.5 行内表示の方式（製品ごと）</h3>
+  <div class="tw"><table>
+    <thead><tr><th>製品</th><th>VS Code での描き方</th><th>Neovim での描き方</th></tr></thead>
+    <tbody>
+      <tr><td>Copilot</td><td>ゴースト文字（inline completion）</td><td>本体の <code>vim.lsp.inline_completion</code></td></tr>
+      <tr><td>Wallaby / Quokka</td><td>行脇のゲージと行内の値</td><td>無し（ブラウザ）</td></tr>
+      <tr><td>nvim-dap-virtual-text（デバッガの変数の値）</td><td>—</td><td>extmark の virtual text。変数の発見は tree-sitter の <code>locals.scm</code></td></tr>
+      <tr><td>Continue</td><td>CodeLens（行の上に別行で出る）</td><td>—</td></tr>
+      <tr><td>GitLens</td><td>decoration（行末）</td><td>—</td></tr>
+    </tbody>
+  </table></div>
+  <p>LSP の標準には「解説や実行結果を行末に出す」機能は無い。<code>textDocument/inlineValue</code> はデバッガ用で、Neovim は対応していない <span class="m d">直</span>。よって独自メソッドは避けられない。</p>
+
+  <h2 id="b">3. 問い B：多言語のコード構造をどこから取るか</h2>
+  <p>必要なのは、対象の関数について「本体の範囲」「外側の型（メソッドならそのクラス）」「直接の呼び出し元と呼び出し先」を、言語を問わず取ること。候補は 4 つ。</p>
+
+  <h3>3.1 tree-sitter（構文のみ）</h3>
+  <ul>
+    <li>対応言語: tree-sitter-language-pack が 371 言語の文法を束ねる。ただし <b>tags クエリ（定義と参照を抜き出す問い合わせ）があるのは 97 言語</b> <span class="m d">直</span>。文法があることと、関数と呼び出しを取れることは別。</li>
+    <li>公式のバインディング（各言語からの使い方）: C#、Go、Haskell、Java、JavaScript（Node と wasm）、Kotlin、Python、Rust、Swift、Zig <span class="m s">要約</span>。Rust は本体のクレートが第一級。<b>Go 用（go-tree-sitter、298★）は 2025-11 で更新が止まっている</b> <span class="m d">直</span>。Zig 用は 125★ <span class="m d">直</span>。</li>
+    <li>精度の限界: tags の「参照」は<b>名前の一致</b>で取る。同名の別の関数も拾う（取りすぎる）。型の情報は無い。</li>
+    <li>aider（LLM に渡す「リポジトリの地図」を tree-sitter で作る、代表的な実例）の実装を直接読んだ結果: 参照は名前の一致で、足りない分は pygments（字句解析）で補っている <span class="m d">直</span>。さらに、標準の tags クエリに「呼び出し（<code>@reference.call</code>）」が無い言語がある: <b>C、C++、C#、Swift、Zig は 0 件</b> <span class="m d">直</span>。これらの言語では呼び出し元を tags からは取れない。</li>
+    <li>1 言語を足すコスト: 文法 1 つと tags クエリ 1 本。</li>
+  </ul>
+
+  <h3>3.2 エディタの言語サーバー（LSP の call hierarchy）</h3>
+  <p>型を解決した正確な呼び出し元が取れる。ただし<b>言語サーバーごとに有無が違う</b>（ソースを直接確認 <span class="m d">直</span>）:</p>
+  <div class="tw"><table>
+    <thead><tr><th>言語サーバー</th><th>call hierarchy</th></tr></thead>
+    <tbody>
+      <tr><td>gopls、rust-analyzer、pyright、clangd</td><td>あり</td></tr>
+      <tr><td>typescript-language-server</td><td>あり（条件つき）</td></tr>
+      <tr><td>jdtls（Java）</td><td>型の import はあり、提供の最終確認は未</td></tr>
+      <tr><td>ruby-lsp</td><td><b>無し</b>。要望は「型検査なしには完全な階層は不可能」として not_planned で閉鎖</td></tr>
+      <tr><td>Sorbet（Ruby）</td><td><b>無し</b>。要望は open のまま</td></tr>
+      <tr><td>zls（Zig）</td><td>記述なし</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>つまり、LSP に頼ると「言語によって品質が変わる道具」になる。動的言語では構造的に無理。</li>
+    <li>Serena（LSP を使って 40 言語超を謳う MCP サーバー、29,952★）ですら、機能一覧に call hierarchy を載せていない。利用者のエディタの言語サーバーを再利用するのではなく、自分で起動し直す設計。Java の言語サーバーの資源暴走（#1944）、起動が終わらない（#937）などの運用の不満がある <span class="m d">直</span>。</li>
+    <li>Continue は tree-sitter と IDE の定義ジャンプの両方を使い、<b>遅ければ LSP の結果を捨てる</b>（<code>racePromise</code>）<span class="m d">直</span>。LSP を「あれば使う任意の経路」として扱っている。</li>
+  </ul>
+
+  <h3>3.3 SCIP / stack-graphs / CodeQL（索引を作る方式）</h3>
+  <ul>
+    <li>SCIP（Sourcegraph の索引形式）: 索引を作るプログラムは言語ごとに別で、約 9 系統（Java、TypeScript、C/C++、Ruby、Python、.NET、Dart、PHP、Go）。多言語に足りない <span class="m d">直</span>。</li>
+    <li>stack-graphs（GitHub が作った、tree-sitter 上で名前解決をする仕組み）: <b>archived</b>。README に「This repository is no longer supported or updated by GitHub」<span class="m d">直</span>。業界の本命だった方式が撤退した。</li>
+    <li>CodeQL: 12 言語だが、CLI のライセンスが「私有コードの自動解析」を禁じる（有償契約を除く）<span class="m d">直</span>。個人の道具の土台にならない。</li>
+  </ul>
+
+  <h3>3.4 LLM に文脈を渡す製品が実際に使っているもの</h3>
+  <div class="tw"><table>
+    <thead><tr><th>製品</th><th>使っているもの</th></tr></thead>
+    <tbody>
+      <tr><td>aider</td><td>tree-sitter の定義と参照（名前一致）+ グラフのランク付け</td></tr>
+      <tr><td>Continue</td><td>tree-sitter（wasm 版を同梱）+ IDE の定義ジャンプ（遅ければ捨てる）</td></tr>
+      <tr><td>avante.nvim</td><td>自前の Rust クレートに tree-sitter の文法を直接組み込み、17 言語に固定</td></tr>
+      <tr><td>Cody</td><td>検索（BM25）。embeddings は撤退</td></tr>
+      <tr><td>Cursor</td><td>構文の塊ごとの embeddings。方式の詳細は非公開</td></tr>
+    </tbody>
+  </table></div>
+  <p>「関数 + 呼び出し元」を多言語で正面から扱っているのは aider だけで、方式は名前一致。精度を数値で述べた一次情報はどの製品にも無い。</p>
+
+  <h3>3.5 結論</h3>
+  <div class="key">
+    <p>多言語を最初から扱うなら、<b>tree-sitter の文法をバックエンドに同梱する</b>のが実例（Continue、avante.nvim）のある形。エディタの言語サーバーや、利用者が入れた tree-sitter のパーサに頼ると、言語と環境で結果が変わる。</p>
+    <p>呼び出し元は「候補 + 確からしさの印（名前一致か、言語サーバーで解決済みか）」として扱う。確定した呼び出し元が要る場面では、エディタの call hierarchy を「あれば使う」。</p>
+  </div>
+
+  <h2 id="c">4. 問い C：Neovim の拡張をどう作ると速いか</h2>
+  <h3>4.1 描画の性能 <span class="m t">測</span>（nvim 0.12.5、1 機種）</h3>
+  <p>行ごとに <code>nvim_buf_set_extmark</code>（extmark を 1 つ置く API）を Lua から呼ぶ、いちばん素朴な方法で測った。各行に 80 字弱の文字列を行末（<code>eol</code>）に付けた。</p>
+  <div class="tw"><table>
+    <thead><tr><th>行数</th><th>全行に付けるのにかかった時間</th><th>スクロール時の再描画</th></tr></thead>
+    <tbody>
+      <tr><td class="num">200</td><td class="num">0.2 ms</td><td class="num">0.02 ms</td></tr>
+      <tr><td class="num">2,000</td><td class="num">2.3 ms</td><td class="num">0.05 ms</td></tr>
+      <tr><td class="num">20,000</td><td class="num">24.6 ms</td><td class="num">0.06 ms</td></tr>
+      <tr><td class="num">100,000</td><td class="num">124 ms</td><td class="num">0.06 ms</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>1 件あたり 1.2 µs。件数に比例する。スクロールの再描画は、extmark が 0 件でも 10 万件でも変わらない。</li>
+    <li><b>結論: 数千行の行末注釈は、Neovim では描画の問題にならない。</b></li>
+    <li>注意: 再描画の値は Neovim 内部の画面更新の時間で、端末に文字を送る時間は含まない。</li>
+  </ul>
+  <p>外部のプロセスから Neovim の API を呼んで付ける場合（2,000 行）<span class="m t">測</span>: 1 行ずつ同期で呼ぶと 50.6 ms、1 回の呼び出しにまとめると 2.7〜5.0 ms。<b>まとめて 1 回で渡すのが約 20 倍速い。</b></p>
+
+  <h3>4.2 Neovim 本体とプラグインが採っている描画の型（ソースを直接確認 <span class="m d">直</span>）</h3>
+  <div class="tw"><table>
+    <thead><tr><th>型</th><th>やり方</th><th>採っているもの</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td><code>nvim_set_decoration_provider</code> で、画面に見えている行だけにその都度付ける</td><td>本体の inlay hint、semantic tokens、codelens。gitsigns、snacks.nvim、mini.diff</td></tr>
+      <tr><td>B</td><td>待ち時間（100〜200 ms）を置いて、見えている範囲 + 余白に付ける</td><td>indent-blankline v3、render-markdown.nvim</td></tr>
+      <tr><td>C</td><td>結果が届いた時点で全行に付ける</td><td>本体の <code>vim.diagnostic</code>、nvim-dap-virtual-text</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>編集で行がずれても注釈を追従させたいなら、消えない（永続の）extmark が要る。本体の semantic tokens のソースの原文: 「the buffer updates are not in sync with the list of semantic tokens. There's a delay between the buffer changing and when the LSP server can respond with updated tokens, and we don't want to "blink"」<span class="m d">直</span>。外部で作った解説を行に貼るこの道具に、そのまま当てはまる。</li>
+    <li>型 C（全行に一度に付ける）で 2,000 行が 2.3 ms なので、この道具には型 C で足りる。</li>
+  </ul>
+
+  <h3>4.3 Neovim 側で重い処理をどこでやるか</h3>
+  <div class="tw"><table>
+    <thead><tr><th>選択肢</th><th>実測・前例</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td>純 Lua（LuaJIT）</td><td>2,000 行分の JSON（313 KB）の読み取りが 0.69 ms <span class="m t">測</span></td><td>十分速い</td></tr>
+      <tr><td>Lua から FFI で Zig / Rust / C の共有ライブラリを呼ぶ</td><td>前例は telescope-fzf-native（C）、telescope-zf-native（Zig、2024-09 で更新停止）、blink.cmp（Rust）。blink.cmp は 1 万件超の候補を毎回照合する処理で「fzf の約 6 倍」を主張。fzf-native には segfault の報告が複数、ビルド失敗が open のまま <span class="m d">直</span></td><td>この道具の計算量（JSON を受けて行に貼る）には当てはまらない。クラッシュがエディタごと起きる</td></tr>
+      <tr><td>外部プロセス（<code>vim.system</code> / <code>jobstart</code>）</td><td>プロセス起動 1.04 ms、常駐した子との 1 往復 0.007 ms、313 KB の往復 0.89 ms <span class="m t">測</span></td><td>十分速い。落ちてもエディタは無事</td></tr>
+      <tr><td>wasm</td><td><b>Neovim に wasm のプラグインを動かす仕組みが無い。</b> 本体の issue #23579「wasm (webassembly) plugins」は「This is just a tracking issue. Not planned.」<span class="m d">直</span>。試作が 2 件あるが本体に入っていない。Zellij や Zed は専用のランタイムを持つが、Neovim は持たない</td><td>使えない</td></tr>
+    </tbody>
+  </table></div>
+  <p>JSON と msgpack（バイナリ形式）の比較 <span class="m t">測</span>: Neovim の Lua では JSON の方が 4〜5 倍速い。msgpack が要るのは、外部プロセスが Neovim の API を直接呼ぶときだけ。</p>
+
+  <h3>4.4 Neovim 本体の方針 <span class="m d">直</span></h3>
+  <ul>
+    <li>プラグインは Lua が第一。登録不要で、置くだけで動く。</li>
+    <li>外部の解析ツールの入口は LSP。<code>vim.lsp.start()</code> は <code>cmd</code> に Lua の関数も受けるので、同じプロセスの中で LSP サーバーを動かすこともできる。</li>
+    <li>古い「remote plugin」の仕組みは、本体の issue で「too complex」とされ、簡素化が計画中。</li>
+  </ul>
+
+  <h3>4.5 Neovim の中の tree-sitter</h3>
+  <ul>
+    <li>Neovim 本体が同梱するパーサは C、Diff、Lua、Markdown、Vimscript、Vimdoc、query の 7 種だけ <span class="m d">直</span>。他の言語は利用者が nvim-treesitter などで入れる。理由は「数百のパーサを同梱すると GB 級になる」<span class="m d">直</span>。</li>
+    <li>プラグインから <code>vim.treesitter.get_parser</code> で使えるが、パーサが無い言語では nil が返る。</li>
+    <li>「関数の範囲」を言語横断で取るクエリ（<code>@function.outer</code>）は nvim-treesitter-textobjects が 52 言語分持つ <span class="m d">直</span>。</li>
+    <li>結論: Neovim の中の tree-sitter に頼ると、利用者の環境で結果が変わる。多言語で同じ結果を出すなら、バックエンド側に文法を持つ方が確実。</li>
+  </ul>
+
+  <h3>4.6 以前の記録（2026-09-30）からの補足</h3>
+  <ul>
+    <li>Rust を cdylib にして Neovim に読み込ませる形（blink.cmp、avante.nvim）は、プレビルドの不一致や古い CPU で <b>Neovim ごと落ちる</b>報告が複数ある <span class="m d">直</span>。</li>
+    <li>nvim-oxi（Rust から Neovim の C API を直接呼ぶ）は Neovim の版に強く結びつき、0.12.2 で panic する issue が open <span class="m d">直</span>。</li>
+  </ul>
+
+  <h2 id="d">5. 問い D：VS Code の拡張をどう作ると速いか</h2>
+  <h3>5.1 拡張の構造</h3>
+  <ul>
+    <li>VS Code の拡張は、画面を描くプロセスとは別の「拡張ホスト」（Node.js のプロセス、またはブラウザ版では Web Worker）で動く <span class="m s">要約</span>。描画の命令は拡張ホストから描画側へ送られる。</li>
+    <li>行末に文字を出すには <code>createTextEditorDecorationType</code> で decoration を作り、<code>setDecorations</code> で範囲を渡す。</li>
+  </ul>
+
+  <h3>5.2 行ごとに違う文章を全行に付けると固まる（重要）</h3>
+  <ul>
+    <li>VS Code の描画側のソースの原文: 「identify custom render options by a hash code over all keys and values」<span class="m d">直</span>。つまり、<b>行末の文字列（renderOptions）が違うごとに、CSS の型が 1 つ作られる。</b> 行ごとに違う解説を付けると、行数ぶん CSS の型ができる。</li>
+    <li>実測（microsoft/vscode の PR #337313、未マージ、報告者 1 人）: 約 11,000 件の診断を付けたファイルで、描画側が 66 秒止まった。うち 45 秒は CSS の撤去（二次の走査）。挿入は 36,000 ルールで 0.4 秒 <span class="m d">直</span>。</li>
+    <li>Error Lens（行末にエラーを出す拡張、841★）は 2026-09-26 の 3.29.0 で「1 ファイルに 1,000 件超のときは、見えている行だけに描く」に直した。設定の説明の原文: 「VSCode creates a separate set of CSS rules for every distinct inline message, so a file with thousands of problems can freeze the editor for a long time.」<span class="m d">直</span></li>
+    <li>GitLens は最初から<b>カーソル行だけ</b>に行末注釈を出す <span class="m d">直</span>。</li>
+  </ul>
+  <div class="key"><p><b>結論:</b> VS Code では、画面に見えている行 ± 余白にだけ付け、スクロールに合わせて付け替える。長い全文は hover（マウスを乗せたときの説明窓）に回す。inlay hint は VS Code の既定で 1 行 43 文字で切られるので、解説には使えない（2026-09-30 の記録 <span class="m d">直</span>）。</p></div>
+
+  <h3>5.3 VS Code の中で Rust などのコアを動かす方法</h3>
+  <div class="tw"><table>
+    <thead><tr><th>方法</th><th>事実</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td>ネイティブ Node モジュール</td><td>Electron の ABI に合わせた再ビルドが要る</td><td>子プロセスにすれば避けられる</td></tr>
+      <tr><td>wasm（<code>@vscode/wasm-wasi</code>）</td><td>公式の仕組みはある（WASI Preview 1）。しかし <b>同じバイナリが wasmtime より 15 倍遅い</b>という報告があり、保守者は「I can't improve the performance of the WASM runtime that ships in Electron / Browser」と回答 <span class="m d">直</span>。公式も「Rust から VS Code の API を直接呼ぶ」案を async 対応が無いため見送り <span class="m d">直</span></td><td>不採用</td></tr>
+      <tr><td>子プロセスのバイナリ</td><td>Ruff（Python の linter、1,675★）の拡張が同梱バイナリを起動する形 <span class="m d">直</span>。Copilot も同じ</td><td>採用</td></tr>
+    </tbody>
+  </table></div>
+  <p>ブラウザ版の VS Code（vscode.dev）では「Creating child processes or running executables is not possible」<span class="m d">直</span>。子プロセス型は動かない。対応するなら wasm 版（15 倍遅い）が要る。</p>
+
+  <h3>5.4 LSP を使うか、拡張の API を直接使うか</h3>
+  <ul>
+    <li>公式の指針: LSP の利点は「サーバーを別の言語で書ける」「重い処理を別プロセスに逃がせる」の 2 つ。「they are not the only option」<span class="m s">要約</span>。</li>
+    <li>LSP を使わない例: GitLens、Error Lens、coverage-gutters（いずれも拡張の API を直接使う）。LSP を使う例: Copilot の補完。</li>
+    <li>LSP で表せない画面（行末の装飾、独自のビュー）は、サーバーから独自の通知を受けて、拡張側で描く。clangd の拡張がこの形の実例 <span class="m d">直</span>。</li>
+  </ul>
+
+  <h3>5.5 多言語の関数の範囲を VS Code 側で取る方法</h3>
+  <ul>
+    <li><code>vscode.executeDocumentSymbolProvider</code> で、入っている言語拡張のシンボル情報を使える。ただし<b>言語拡張が無いと <code>undefined</code> が返り、「空」と区別できない</b> <span class="m d">直</span>。</li>
+    <li>anycode（Microsoft の、tree-sitter の wasm で構造を出す拡張）は 7 言語で、README 自身が「_inaccurately_ implements」と書く <span class="m d">直</span>。</li>
+    <li>結論: VS Code 側の仕組みに頼らず、バックエンドが tree-sitter で取る方が、言語と環境によらない。</li>
+  </ul>
+
+  <h2 id="e">6. 問い E：バックエンドを何の言語で書くか</h2>
+  <h3>6.1 起動時間と大きさ <span class="m t">測</span>（最小の LSP サーバー、hyperfine 50 回）</h3>
+  <div class="tw"><table>
+    <thead><tr><th>言語</th><th>バイナリの大きさ</th><th>起動から最初の応答まで</th><th>メモリ</th></tr></thead>
+    <tbody>
+      <tr><td>Rust</td><td class="num">0.47 MB</td><td class="num">1.2 ms</td><td class="num">1.7 MB</td></tr>
+      <tr><td>Go</td><td class="num">2.5 MB</td><td class="num">1.7 ms</td><td class="num">4.4 MB</td></tr>
+      <tr><td>Bun の単一バイナリ（TypeScript）</td><td class="num">63 MB</td><td class="num">11.9 ms</td><td class="num">28 MB</td></tr>
+      <tr><td>Node（TypeScript）</td><td class="num">111 MB（Node 本体）</td><td class="num">19.3 ms</td><td class="num">43 MB</td></tr>
+    </tbody>
+  </table></div>
+  <p>Rust と Go の差はミリ秒以下で、体感に乗らない。TypeScript は配布物が大きい。</p>
+
+  <h3>6.2 言語ごとの部品の有無</h3>
+  <div class="tw"><table>
+    <thead><tr><th>必要な部品</th><th>Rust</th><th>Go</th><th>TypeScript</th></tr></thead>
+    <tbody>
+      <tr><td>tree-sitter</td><td>本体のクレート（第一級）</td><td>go-tree-sitter は 2025-11 で停止。CGO が要りクロスコンパイルが面倒</td><td>web-tree-sitter（wasm）。Continue が使う</td></tr>
+      <tr><td>LSP サーバーのライブラリ</td><td>tower-lsp-server 0.23（2026-09）。Harper（16,000★）と typos-lsp が採用。本家の tower-lsp は 2023-08 で停止</td><td>sourcegraph/jsonrpc2 + go.lsp.dev/protocol。多数派だが保守者が少ない。glsp は 15 か月停止</td><td>vscode-languageserver（最も整っている）</td></tr>
+      <tr><td>OpenAI 互換の HTTP クライアント</td><td>reqwest + serde</td><td>公式 SDK あり</td><td>公式 SDK あり</td></tr>
+      <tr><td>単一バイナリの配布</td><td>容易</td><td>容易</td><td>Bun で 63 MB、Node SEA は「Active development」でネイティブ依存に制限</td></tr>
+      <tr><td>Neovim の利用者への要求</td><td>無し</td><td>無し</td><td>Node を要求するか、巨大バイナリ</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>6.3 Zig について</h3>
+  <p>tree-sitter の Zig 用バインディング（125★）はある。しかし、LSP サーバー・HTTP・JSON の各ライブラリで、実績のある組み合わせをこの調査では確認していない。Neovim 側で Zig を FFI で使う前例は 2 件で、どちらも軽い計算（4.3）。<b>Zig をバックエンドの本命にするなら、Zig だけの調査が別に要る。</b></p>
+
+  <h3>6.4 結論</h3>
+  <div class="key"><p>多言語の構造を tree-sitter で取り、単一バイナリで配り、両エディタに LSP で話す、という条件では <b>Rust</b> が、部品の有無・配布・前例（Harper、typos-lsp）の 3 点で最も整っている。Go は tree-sitter のバインディングが止まっている点で落ち、TypeScript は配布で落ちる。</p></div>
+
+  <h2 id="open">7. 「ファイルを開いたときに出る」をどう実現するか</h2>
+  <h3>7.1 物理的な制約</h3>
+  <p>LLM に行ごとの解説を書かせる以上、生成には時間がかかる。200 行の関数に 1 行 15 語の解説を付けると、出力は約 3,000〜4,000 トークン。</p>
+  <div class="tw"><table>
+    <thead><tr><th>LLM の速さ</th><th>かかる時間</th></tr></thead>
+    <tbody>
+      <tr><td>毎秒 50 トークン（手元のモデル）</td><td class="num">60〜80 秒</td></tr>
+      <tr><td>毎秒 150 トークン（速いクラウド）</td><td class="num">20〜30 秒</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>初回に「開いた瞬間に全行」は不可能。</b> これは言語やエディタの技術では解決しない。</p>
+
+  <h3>7.2 前例から取れる部品</h3>
+  <ul>
+    <li>開いているファイルだけを対象にする（Sourcery、Copilot の <code>didFocus</code>、Continue の 20 件）。</li>
+    <li>1 件ずつ出す、待ち時間（debounce）を置く、途中でキャンセルする（補完系の共通の慣行）。</li>
+    <li>結果を利用者のキャッシュ領域に保存する（Continue は SQLite、copilot.lua は <code>stdpath("data")</code>）。</li>
+    <li>編集に追従させるなら、Neovim は永続 extmark、VS Code は <code>rangeBehavior: ClosedClosed</code>。</li>
+  </ul>
+
+  <h3>7.3 前例が無い部分（設計で埋める）</h3>
+  <ul>
+    <li>解説結果を「関数本体のハッシュ」で鍵づけして保存する。前例は無いが、ファイル単位だと 1 行直すたびに全部無効になるので、関数単位の方が細かい。</li>
+    <li>見えている範囲の関数から順に生成し、関数 1 つ終わるごとに貼る。</li>
+  </ul>
+
+  <h2 id="f">8. 問い F：実行して裏付けるとしたら（要件から外れたが、情報として）</h2>
+  <ul>
+    <li>Go なら、<code>go test -race -json</code> でデータ競合の報告と、シナリオごとに通った行（カバレッジ）が取れる。生成したテストはリポジトリに書かず <code>-overlay</code> で差し込める。テストバイナリを 1 回ビルドし（0.8 秒）、別プロセスで 20 回走らせると race を 20 回とも検出した（同じプロセス内の <code>-count=3</code> では 1 回だけ）<span class="m t">測</span>。</li>
+    <li>他の言語は、テストの書き方・実行・結果の読み取りが全部違い、言語ごとにアダプタを書くことになる。Rust のテストの JSON 出力は「experimental」で不安定。並行処理の検証が安く成立するのは Go だけ。</li>
+    <li>以上から、実行は「多言語」「開いたら出る」の 2 つの要件と衝突する。</li>
+  </ul>
+
+  <h2 id="g">9. 問い G：LLM の推論はどれくらい当たるか（元の草案の調査より）</h2>
+  <ul>
+    <li>実行結果を当てるベンチマーク（CRUXEval）: 最大 13 行の短い関数でも正答は 44〜63%。</li>
+    <li>データ競合を見つけるベンチマーク（DRPBench、ICML 2026）: 最良のモデルで F1 75%、ほとんどは 60% 未満。</li>
+    <li>自動生成のレビューコメントを付けても重大な問題の検出は増えず、コメントに引きずられる傾向（アンカリング）が見られた（ICSE 2025、29 人）。</li>
+    <li>含意: 実行しない以上、解説の 4 割前後は間違っている前提で設計する。「構造から機械的に分かる事実」と「LLM の推論」を分けて見せ、推論には前提を付けることで、読む側が疑う場所を分かるようにする。</li>
+  </ul>
+
+  <h2 id="map">10. 結論の対応表</h2>
+  <div class="tw"><table>
+    <thead><tr><th>要件</th><th>選んだもの</th><th>主な根拠</th><th>選ばなかったものが失うこと</th></tr></thead>
+    <tbody>
+      <tr><td>複数エディタ</td><td>バックエンドをエディタの外に出し、stdio の JSON-RPC で話す</td><td>2.1 の収束</td><td>エディタごとに全部書き直す</td></tr>
+      <tr><td>接続の方式</td><td>LSP の枠 + 独自メソッド（Copilot 型）</td><td>両エディタにクライアントが組み込み。Cody の手書きの実例</td><td>独自方式は起動・再起動・進捗・キャンセル・診断・hover を自分で書く</td></tr>
+      <tr><td>多言語</td><td>tree-sitter の文法をバックエンドに同梱</td><td>3.5。エディタの LSP は言語で揃わない。Neovim のパーサは利用者次第</td><td>言語と環境で結果が変わる</td></tr>
+      <tr><td>バックエンドの言語</td><td>Rust</td><td>6.4</td><td>Go は tree-sitter が止まっている。TS は配布が重い</td></tr>
+      <tr><td>Neovim 側</td><td>Lua だけ。全行に一度に付ける</td><td>4.1 の実測。4.3 の前例</td><td>FFI はクラッシュの代償に見合う処理が無い。wasm は不可</td></tr>
+      <tr><td>VS Code 側</td><td>TypeScript。見えている行だけに付け、全文は hover</td><td>5.2</td><td>全行に付けると固まる</td></tr>
+      <tr><td>ブラウザ版 VS Code</td><td>対応しない</td><td>5.3</td><td>対応するなら wasm（15 倍遅い）</td></tr>
+      <tr><td>配布</td><td>Neovim は Release のバイナリを取得して SHA-256 検証、VS Code は OS 別 VSIX に同梱</td><td>2.4、Ruff の例</td><td>—</td></tr>
+      <tr><td>開いたら出る</td><td>構造の事実と保存済みの解説を即時に、新しい解説は見えている関数から順に</td><td>7</td><td>初回を待つしかない</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="none">11. 見つからなかった前例（全体）</h2>
+  <ul>
+    <li>ファイルを開いた時に行ごとの LLM 解説を生成して行末に出す製品または OSS。</li>
+    <li>実行結果を根拠にした解説を Neovim と VS Code の両方に同じバックエンドで出す製品（Wallaby は Neovim には行内表示を出さない）。</li>
+    <li>Cody と Continue が LSP ではなく独自 JSON-RPC を選んだ理由を書いた文書。</li>
+    <li>解説系ツールの「開いてから最初の注釈までの時間」の公表値。</li>
+    <li>ファイルや関数の内容のハッシュを鍵にした解説結果のキャッシュの公開実装。</li>
+    <li>tree-sitter の名前一致と LSP の call hierarchy の精度（再現率・適合率）を比べた測定。</li>
+    <li>Neovim の extmark の件数と描画の遅延を測った公開資料（今回の実測のみ）。</li>
+    <li>VS Code の decoration の件数別の公開ベンチマーク（PR #337313 の 1 例のみ）。</li>
+    <li>Rust・Go・Zig の wasm コアを VS Code の拡張ホストで本番運用している製品。</li>
+    <li>Zig をバックエンドにした LSP サーバーの実績（調査していない）。</li>
+  </ul>
+
+  <h2 id="decide">12. 裁定事項</h2>
+  <ol>
+    <li>接続の方式: LSP の枠 + 独自メソッドか、独自 JSON-RPC か。速度に差は無く、エディタ側に書く量の差。</li>
+    <li>バックエンドの言語: Rust か。Zig を本命にするなら追加調査。</li>
+    <li>キャッシュの鍵: 関数本体のハッシュ + モデル名 + プロンプトの版、でよいか。</li>
+    <li>「構造から機械的に分かる事実」の層（LLM を使わず、開いた直後に出せる唯一の層）を作るか。</li>
+    <li>ブラウザ版 VS Code を捨ててよいか。</li>
+    <li>同時実行の解説を推論のまま出すか。将来、Go など安く裏付けられる言語だけ実行を足す余地を残すか。</li>
+  </ol>
+</div>
