@@ -1,0 +1,93 @@
+{
+  "name": "code-reading",
+  "displayName": "Code Reading",
+  "description": "Per-line explanations of how code behaves, with scenarios for boundary values and concurrency.",
+  "version": "0.1.0",
+  "publisher": "esh2n",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/esh2n/code-reading-tool"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:rust",
+    "onLanguage:go",
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeReading.read",
+        "title": "Code Reading: Explain Function at Cursor"
+      },
+      {
+        "command": "codeReading.refresh",
+        "title": "Code Reading: Explain Function at Cursor Again"
+      },
+      {
+        "command": "codeReading.showScenario",
+        "title": "Code Reading: Show Scenario"
+      },
+      {
+        "command": "codeReading.toggle",
+        "title": "Code Reading: Toggle Annotations"
+      }
+    ],
+    "configuration": {
+      "title": "Code Reading",
+      "properties": {
+        "codeReading.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the crt binary. Empty uses the bundled one, then crt on PATH."
+        },
+        "codeReading.configPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to crt's configuration file. Empty uses the platform default."
+        },
+        "codeReading.autoRead": {
+          "type": "boolean",
+          "default": true,
+          "description": "Explain uncached functions in view without being asked."
+        },
+        "codeReading.maxParallel": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "How many functions may be explained at once."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --sourcemap",
+    "typecheck": "tsc --noEmit -p .",
+    "test:unit": "esbuild test/unit/*.test.ts --bundle --platform=node --format=cjs --external:vscode --outdir=out/unit && node --test 'out/unit/*.test.js'",
+    "test:e2e": "pnpm build && esbuild test/e2e/*.ts --bundle --platform=node --format=cjs --external:vscode --external:mocha --outdir=out/e2e && node out/e2e/run.js",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "10.1.2"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "1.91.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "mocha": "^12.0.3",
+    "typescript": "7.0.2"
+  }
+}

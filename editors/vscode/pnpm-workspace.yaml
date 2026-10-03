@@ -1,0 +1,4 @@
+# Install scripts are off by default; esbuild needs its own to fetch its binary.
+allowBuilds:
+  esbuild: true
+  "@vscode/vsce-sign": false
