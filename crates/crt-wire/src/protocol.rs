@@ -51,6 +51,20 @@ pub struct FileReadingsParams {
     /// by the reading when it finishes.
     #[serde(default)]
     pub partial: Vec<PartialNotesDto>,
+    /// For functions edited since they were read: the reading they had
+    /// before, placed at their current lines. Shown as old until the
+    /// function is read again.
+    #[serde(default)]
+    pub stale: Vec<StaleReadingDto>,
+}
+
+/// The earlier reading of a function that has been edited since.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleReadingDto {
+    /// The function as it is now.
+    pub function_hash: String,
+    pub reading: ReadingDto,
 }
 
 /// Notes of a reading still being written.
@@ -101,6 +115,19 @@ pub struct InitOptions {
     pub auto_read: bool,
     /// How many functions may be read at once.
     pub max_parallel: usize,
+    /// When an edited function is read again by auto-read.
+    pub read_on: ReadOn,
+}
+
+/// When auto-read reads a function that was edited.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadOn {
+    /// When the file is saved: half-written code is never sent, and one
+    /// slow model is not kept busy with versions that are already gone.
+    Save,
+    /// Two seconds after the last change, saved or not.
+    Idle,
 }
 
 impl Default for InitOptions {
@@ -108,6 +135,7 @@ impl Default for InitOptions {
         Self {
             auto_read: true,
             max_parallel: 2,
+            read_on: ReadOn::Save,
         }
     }
 }
@@ -123,6 +151,9 @@ mod tests {
         let o: InitOptions = serde_json::from_str(r#"{"autoRead": false}"#).unwrap();
         assert!(!o.auto_read);
         assert_eq!(o.max_parallel, 2);
+        assert_eq!(o.read_on, ReadOn::Save);
+        let o: InitOptions = serde_json::from_str(r#"{"readOn": "idle"}"#).unwrap();
+        assert_eq!(o.read_on, ReadOn::Idle);
     }
 
     #[test]

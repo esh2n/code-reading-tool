@@ -348,3 +348,69 @@ fn scenarios_asked_while_the_notes_are_being_written_wait_for_them() {
     // reply), none repeated for the scenarios.
     assert_eq!(notes_requests.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+#[test]
+fn an_edited_function_shows_its_old_reading_and_is_read_again_on_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, notes_requests) = serve_llm_counting();
+    fs::write(
+        dir.path().join("config.toml"),
+        format!("[llm]\nbase_url = \"{url}\"\nmodel = \"m\"\n"),
+    )
+    .unwrap();
+    let path = dir.path().join("p.go");
+    fs::write(&path, SOURCE).unwrap();
+    let uri = format!("file://{}", path.display());
+    let count = || notes_requests.load(std::sync::atomic::Ordering::SeqCst);
+    let all_read = |m: &Value| {
+        file_readings(m)
+            && m["params"]["readings"]
+                .as_array()
+                .is_some_and(|r| r.iter().all(|x| !x.is_null()))
+    };
+
+    let mut lsp = Lsp::start(dir.path());
+    lsp.request(
+        "initialize",
+        json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+    );
+    lsp.notify("initialized", json!({}));
+    lsp.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": uri, "languageId": "go", "version": 1, "text": SOURCE } }),
+    );
+    lsp.wait(file_readings);
+    let view = json!({ "uri": uri, "startLine": 0, "endLine": 20 });
+    lsp.notify("codeReading/visibleRange", view.clone());
+    lsp.wait(all_read);
+    assert_eq!(count(), 2);
+
+    // Typing in Inc: its reading no longer matches, and the old one is sent
+    // as stale, at Inc's lines.
+    let edited = SOURCE.replace("c.n = add(c.n, 1)", "c.n = add(c.n, 2)");
+    lsp.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [ { "text": edited } ] }),
+    );
+    let changed = lsp.wait(|m| file_readings(m) && m["params"]["version"] == 2)["params"].clone();
+    assert!(changed["readings"][0].is_null());
+    assert_eq!(
+        changed["stale"][0]["functionHash"],
+        changed["analysis"]["functions"][0]["hash"]
+    );
+    assert_eq!(changed["stale"][0]["reading"]["notes"][1]["line"], 6);
+
+    // Scrolling before saving does not send the half-edited function.
+    lsp.notify("codeReading/visibleRange", view);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert_eq!(count(), 2, "not read before it is saved");
+
+    // Saving reads it again.
+    lsp.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": uri } }),
+    );
+    let done = lsp.wait(|m| all_read(m) && m["params"]["version"] == 2)["params"].clone();
+    assert_eq!(count(), 3);
+    assert_eq!(done["stale"], json!([]));
+}

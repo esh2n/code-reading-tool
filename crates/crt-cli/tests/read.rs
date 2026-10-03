@@ -118,7 +118,7 @@ fn reads_checks_caches_and_lists() {
     assert_eq!(first["function"]["enclosing"], "C");
     let r = &first["reading"];
     assert_eq!(r["model"], "test-model");
-    assert_eq!(r["prompt"], "v3-japanese");
+    assert_eq!(r["prompt"], "v4-japanese");
     assert_eq!(r["demoted"], 1, "the false fact on line 5 is demoted");
     assert_eq!(r["dropped"], 1, "the note on line 42 is dropped");
     let notes = r["notes"].as_array().unwrap();

@@ -11,26 +11,27 @@ use std::time::{Duration, Instant};
 use crt_app::{FunctionSelector, ReadOptions, Readers};
 use crt_domain::{Function, Note, Reading};
 use crt_wire::protocol::{
-    ConfigPathResult, FILE_READINGS, FileReadingsParams, InitOptions, PartialNotesDto, ReadParams,
-    VisibleRangeParams,
+    ConfigPathResult, FILE_READINGS, FileReadingsParams, InitOptions, PartialNotesDto, ReadOn,
+    ReadParams, StaleReadingDto,
 };
 use crt_wire::{FileAnalysisDto, FunctionReadingDto, NoteDto, ReadingDto};
 use tokio::sync::Semaphore;
 use tower_lsp_server::jsonrpc::{Error as RpcError, ErrorCode, Result as RpcResult};
 use tower_lsp_server::ls_types::notification::Notification;
-use tower_lsp_server::ls_types::request::WorkDoneProgressCreate;
 use tower_lsp_server::ls_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, MarkupContent, MarkupKind, MessageType, NumberOrString, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
-    WorkDoneProgressCreateParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, MarkupContent, MarkupKind, MessageType,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
 };
 use tower_lsp_server::{Client, LanguageServer};
-use tower_lsp_server::{NotCancellable, OngoingProgress, Unbounded};
+
+mod auto_read;
 
 use crate::Services;
 use crate::render;
+use crate::stale;
 
 /// The `codeReading/fileReadings` notification.
 enum FileReadings {}
@@ -79,6 +80,15 @@ struct Inner {
     /// another, so the later ones find the notes in the cache instead of
     /// asking the model again.
     function_locks: Mutex<HashMap<ReadKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// Per document: the last reading of each function, shown as old once
+    /// the function is edited (see `stale`).
+    memory: Mutex<HashMap<String, stale::Memory>>,
+    /// Per document: the hashes of its functions as last saved (or
+    /// opened). With `readOn: save`, auto-read only reads these, so a
+    /// function being edited is read when it is saved, not while typed.
+    saved: Mutex<HashMap<String, HashSet<String>>>,
+    /// Per document: the lines last reported visible, 0-based inclusive.
+    views: Mutex<HashMap<String, (u32, u32)>>,
 }
 
 #[derive(Clone)]
@@ -91,6 +101,9 @@ type Cached = (crt_app::FileAnalysis, Vec<Option<Reading>>);
 /// How long a failed auto-read is left alone before scrolling past the
 /// function tries again.
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// With `readOn: idle`, how long after the last change auto-read runs.
+const IDLE_DELAY: Duration = Duration::from_secs(2);
 
 /// How often notes still arriving are sent to the editor, at most.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
@@ -162,6 +175,9 @@ impl Backend {
                 failed: Mutex::new(HashMap::new()),
                 authors_seen: Mutex::new(Vec::new()),
                 function_locks: Mutex::new(HashMap::new()),
+                memory: Mutex::new(HashMap::new()),
+                saved: Mutex::new(HashMap::new()),
+                views: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -224,6 +240,7 @@ impl Backend {
                 readings: vec![],
                 pending: vec![],
                 partial: vec![],
+                stale: vec![],
             };
             self.inner
                 .client
@@ -246,6 +263,21 @@ impl Backend {
             .flat_map(|r| render::diagnostics(&doc.uri, r))
             .collect();
         let partial = self.partial_notes(key, &analysis.functions);
+        let old = lock(&self.inner.memory)
+            .entry(key.to_string())
+            .or_default()
+            .update(&analysis.functions, &readings);
+        let stale = analysis
+            .functions
+            .iter()
+            .zip(old)
+            .filter_map(|(f, r)| {
+                Some(StaleReadingDto {
+                    function_hash: f.hash.to_string(),
+                    reading: ReadingDto::from(&r?),
+                })
+            })
+            .collect();
         let params = FileReadingsParams {
             uri: key.to_string(),
             version: doc.version,
@@ -256,6 +288,7 @@ impl Backend {
                 .collect(),
             pending,
             partial,
+            stale,
         };
         self.inner
             .client
@@ -516,128 +549,6 @@ impl Backend {
             .map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
         Ok(ConfigPathResult { path, created })
     }
-
-    /// `codeReading/visibleRange`: read uncached functions the user can see.
-    pub async fn visible_range(&self, params: VisibleRangeParams) {
-        let Some(explainer) = self.inner.services.explainer.clone() else {
-            return;
-        };
-        if !self.options().auto_read {
-            return;
-        }
-        let authors = tokio::task::spawn_blocking(move || explainer.authors())
-            .await
-            .unwrap_or_default();
-        {
-            let mut seen = lock(&self.inner.authors_seen);
-            if *seen != authors {
-                *seen = authors;
-                lock(&self.inner.failed).clear();
-                lock(&self.inner.shown).clear();
-            }
-        }
-        let Some(doc) = self.doc(&params.uri) else {
-            return;
-        };
-        let Some((analysis, readings)) = self.cached(&doc).await else {
-            return;
-        };
-        let (first, last) = (params.start_line as usize + 1, params.end_line as usize + 1);
-        let wanted: Vec<Function> = analysis
-            .functions
-            .into_iter()
-            .zip(readings)
-            .filter(|(f, r)| r.is_none() && f.span.start_line <= last && first <= f.span.end_line)
-            .map(|(f, _)| f)
-            .collect();
-        for function in wanted {
-            let key = (params.uri.clone(), function.hash.to_string());
-            let recently_failed = lock(&self.inner.failed)
-                .get(&key)
-                .is_some_and(|at| at.elapsed() < FAILURE_COOLDOWN);
-            if recently_failed || !lock(&self.inner.in_flight).insert(key.clone()) {
-                continue;
-            }
-            let guard = InFlight {
-                inner: Arc::clone(&self.inner),
-                key,
-            };
-            let this = self.clone();
-            tokio::spawn(async move { this.auto_read(guard, function.name).await });
-        }
-    }
-
-    async fn auto_read(&self, guard: InFlight, name: String) {
-        let Some(permits) = self.inner.permits.get().cloned() else {
-            return;
-        };
-        let Ok(_permit) = permits.acquire_owned().await else {
-            return;
-        };
-        let key = guard.key.clone();
-        // The document may have changed while waiting: read the function
-        // with this hash if it is still there and still unread.
-        let Some(doc) = self.doc(&key.0) else { return };
-        let Some((analysis, readings)) = self.cached(&doc).await else {
-            return;
-        };
-        let target = analysis
-            .functions
-            .iter()
-            .zip(&readings)
-            .find(|(f, _)| f.hash.to_string() == key.1);
-        let Some((function, None)) = target else {
-            return;
-        };
-        let function = function.clone();
-        self.publish(&key.0).await;
-        let progress = self.begin_progress(&key, &name).await;
-        let outcome = self.read_function(&doc, &function, false).await;
-        drop(guard);
-        if let Some(p) = progress {
-            p.finish().await;
-        }
-        match outcome {
-            Ok(r) => {
-                for w in r.warnings {
-                    self.show_once(w).await;
-                }
-            }
-            Err(e) => {
-                lock(&self.inner.failed).insert(key.clone(), Instant::now());
-                self.show_once(e).await;
-            }
-        }
-        self.publish(&key.0).await;
-    }
-
-    /// Shows "reading <function>" in the editor's progress area, when the
-    /// client supports server-initiated progress.
-    async fn begin_progress(
-        &self,
-        key: &(String, String),
-        name: &str,
-    ) -> Option<OngoingProgress<Unbounded, NotCancellable>> {
-        let token = NumberOrString::String(format!("crt/{}/{}", key.0, key.1));
-        let created = self
-            .inner
-            .client
-            .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
-                token: token.clone(),
-            })
-            .await;
-        if created.is_err() {
-            return None;
-        }
-        Some(
-            self.inner
-                .client
-                .progress(token, "crt")
-                .with_message(format!("reading {name}"))
-                .begin()
-                .await,
-        )
-    }
 }
 
 fn rpc_error(code: ErrorCode, message: String) -> RpcError {
@@ -679,8 +590,13 @@ impl LanguageServer for Backend {
         let _ = self.inner.options.set(options);
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                        ..TextDocumentSyncOptions::default()
+                    },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 experimental: Some(
@@ -722,6 +638,7 @@ impl LanguageServer for Backend {
             text: Arc::new(d.text.into_bytes()),
         };
         lock(&self.inner.docs).insert(key.clone(), doc);
+        self.mark_saved(&key).await;
         self.publish(&key).await;
     }
 
@@ -739,12 +656,34 @@ impl LanguageServer for Backend {
             doc.text = Arc::new(change.text.into_bytes());
         }
         self.publish(&key).await;
+        if self.options().read_on == ReadOn::Idle {
+            // Read again once the typing stops: only if no newer change
+            // arrived in the meantime.
+            let (this, version) = (self.clone(), params.text_document.version);
+            tokio::spawn(async move {
+                tokio::time::sleep(IDLE_DELAY).await;
+                if this.doc(&key).is_some_and(|d| d.version == version) {
+                    this.read_in_view(&key).await;
+                }
+            });
+        }
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let key = params.text_document.uri.as_str().to_string();
+        self.mark_saved(&key).await;
+        if self.options().auto_read && self.options().read_on == ReadOn::Save {
+            self.read_in_view(&key).await;
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         lock(&self.inner.docs).remove(uri.as_str());
         lock(&self.inner.failed).retain(|(u, _), _| u != uri.as_str());
+        lock(&self.inner.memory).remove(uri.as_str());
+        lock(&self.inner.saved).remove(uri.as_str());
+        lock(&self.inner.views).remove(uri.as_str());
         self.inner
             .client
             .publish_diagnostics(uri, vec![], None)

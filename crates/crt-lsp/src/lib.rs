@@ -4,6 +4,7 @@
 
 mod backend;
 mod render;
+mod stale;
 
 use std::sync::Arc;
 
