@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crt_app::{FunctionSelector, ReadOptions, Readers};
 use crt_domain::{Function, Reading};
@@ -13,7 +14,7 @@ use crt_wire::protocol::{
 };
 use crt_wire::{FileAnalysisDto, FunctionReadingDto, ReadingDto};
 use tokio::sync::Semaphore;
-use tower_lsp_server::jsonrpc::{Error as RpcError, Result as RpcResult};
+use tower_lsp_server::jsonrpc::{Error as RpcError, ErrorCode, Result as RpcResult};
 use tower_lsp_server::ls_types::notification::Notification;
 use tower_lsp_server::ls_types::request::WorkDoneProgressCreate;
 use tower_lsp_server::ls_types::{
@@ -55,6 +56,9 @@ struct Inner {
     permits: OnceLock<Arc<Semaphore>>,
     /// Errors already shown, so auto-read does not repeat them.
     shown: Mutex<HashSet<String>>,
+    /// Auto-reads that failed, and when. They are not retried on every
+    /// scroll; an explicit read or the cooldown clears them.
+    failed: Mutex<HashMap<(String, String), Instant>>,
 }
 
 #[derive(Clone)]
@@ -63,6 +67,22 @@ pub struct Backend {
 }
 
 type Cached = (crt_app::FileAnalysis, Vec<Option<Reading>>);
+
+/// How long a failed auto-read is left alone before scrolling past the
+/// function tries again.
+const FAILURE_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Removes an in-flight key when the read ends, however it ends.
+struct InFlight {
+    inner: Arc<Inner>,
+    key: (String, String),
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        lock(&self.inner.in_flight).remove(&self.key);
+    }
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -79,6 +99,7 @@ impl Backend {
                 options: OnceLock::new(),
                 permits: OnceLock::new(),
                 shown: Mutex::new(HashSet::new()),
+                failed: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -120,8 +141,30 @@ impl Backend {
     /// Sends the document's facts and readings, and its diagnostics.
     async fn publish(&self, key: &str) {
         let Some(doc) = self.doc(key) else { return };
-        let Some((analysis, readings)) = self.cached(&doc).await else {
-            // Not a language we know: clear anything shown before.
+        let cached = self.cached(&doc).await;
+        // A newer version arrived while this one was being analysed; its own
+        // publish follows, and sending this one now could land after it.
+        if self.doc(key).map(|d| d.version) != Some(doc.version) {
+            return;
+        }
+        let Some((analysis, readings)) = cached else {
+            // Unknown language or unreadable: clear anything shown before.
+            let params = FileReadingsParams {
+                uri: key.to_string(),
+                version: doc.version,
+                analysis: FileAnalysisDto {
+                    wire_version: crt_wire::WIRE_VERSION,
+                    language: String::new(),
+                    has_syntax_error: false,
+                    functions: vec![],
+                },
+                readings: vec![],
+                pending: vec![],
+            };
+            self.inner
+                .client
+                .send_notification::<FileReadings>(params)
+                .await;
             self.inner
                 .client
                 .publish_diagnostics(doc.uri.clone(), vec![], Some(doc.version))
@@ -200,14 +243,19 @@ impl Backend {
 
     /// `codeReading/read`.
     pub async fn read(&self, params: ReadParams) -> RpcResult<FunctionReadingDto> {
-        let doc = self
-            .doc(&params.uri)
-            .ok_or_else(|| invalid(format!("{} is not open", params.uri)))?;
+        let doc = self.doc(&params.uri).ok_or_else(|| {
+            rpc_error(
+                ErrorCode::InvalidParams,
+                format!("{} is not open", params.uri),
+            )
+        })?;
         let line = params.line as usize + 1;
         let result = self
             .read_function(&doc, FunctionSelector::Line(line), params.refresh)
             .await
-            .map_err(invalid)?;
+            .map_err(|e| rpc_error(ErrorCode::InternalError, e))?;
+        // Asking explicitly is a fresh start for auto-read in this file.
+        lock(&self.inner.failed).retain(|(uri, _), _| uri != &params.uri);
         for w in &result.warnings {
             self.show_once(w.clone()).await;
         }
@@ -236,49 +284,63 @@ impl Backend {
             .collect();
         for function in wanted {
             let key = (params.uri.clone(), function.hash.to_string());
-            if !lock(&self.inner.in_flight).insert(key.clone()) {
+            let recently_failed = lock(&self.inner.failed)
+                .get(&key)
+                .is_some_and(|at| at.elapsed() < FAILURE_COOLDOWN);
+            if recently_failed || !lock(&self.inner.in_flight).insert(key.clone()) {
                 continue;
             }
+            let guard = InFlight {
+                inner: Arc::clone(&self.inner),
+                key,
+            };
             let this = self.clone();
-            tokio::spawn(async move { this.auto_read(key, function).await });
+            tokio::spawn(async move { this.auto_read(guard, function.name).await });
         }
     }
 
-    async fn auto_read(&self, key: (String, String), function: Function) {
-        let permits = Arc::clone(
-            self.inner
-                .permits
-                .get_or_init(|| Arc::new(Semaphore::new(2))),
-        );
+    async fn auto_read(&self, guard: InFlight, name: String) {
+        let Some(permits) = self.inner.permits.get().cloned() else {
+            return;
+        };
         let Ok(_permit) = permits.acquire_owned().await else {
             return;
         };
-        self.publish(&key.0).await;
-        let progress = self.begin_progress(&key, &function.name).await;
-        // Read the current text: if the function changed while waiting, its
-        // hash no longer matches and the read below targets the new version.
-        let outcome = match self.doc(&key.0) {
-            Some(doc) => self
-                .read_function(
-                    &doc,
-                    FunctionSelector::Line(function.span.start_line),
-                    false,
-                )
-                .await
-                .map(|r| r.warnings),
-            None => Ok(vec![]),
+        let key = guard.key.clone();
+        // The document may have changed while waiting: read the function
+        // with this hash if it is still there and still unread.
+        let Some(doc) = self.doc(&key.0) else { return };
+        let Some((analysis, readings)) = self.cached(&doc).await else {
+            return;
         };
-        lock(&self.inner.in_flight).remove(&key);
+        let target = analysis
+            .functions
+            .iter()
+            .zip(&readings)
+            .find(|(f, _)| f.hash.to_string() == key.1);
+        let Some((function, None)) = target else {
+            return;
+        };
+        let start_line = function.span.start_line;
+        self.publish(&key.0).await;
+        let progress = self.begin_progress(&key, &name).await;
+        let outcome = self
+            .read_function(&doc, FunctionSelector::Line(start_line), false)
+            .await;
+        drop(guard);
         if let Some(p) = progress {
             p.finish().await;
         }
         match outcome {
-            Ok(warnings) => {
-                for w in warnings {
+            Ok(r) => {
+                for w in r.warnings {
                     self.show_once(w).await;
                 }
             }
-            Err(e) => self.show_once(e).await,
+            Err(e) => {
+                lock(&self.inner.failed).insert(key.clone(), Instant::now());
+                self.show_once(e).await;
+            }
         }
         self.publish(&key.0).await;
     }
@@ -312,9 +374,9 @@ impl Backend {
     }
 }
 
-fn invalid(message: String) -> RpcError {
+fn rpc_error(code: ErrorCode, message: String) -> RpcError {
     RpcError {
-        code: tower_lsp_server::jsonrpc::ErrorCode::InvalidRequest,
+        code,
         message: message.into(),
         data: None,
     }
@@ -347,7 +409,7 @@ impl LanguageServer for Backend {
         let _ = self
             .inner
             .permits
-            .set(Arc::new(Semaphore::new(options.max_parallel.max(1))));
+            .set(Arc::new(Semaphore::new(options.max_parallel.clamp(1, 16))));
         let _ = self.inner.options.set(options);
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -416,6 +478,7 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         lock(&self.inner.docs).remove(uri.as_str());
+        lock(&self.inner.failed).retain(|(u, _), _| u != uri.as_str());
         self.inner
             .client
             .publish_diagnostics(uri, vec![], None)

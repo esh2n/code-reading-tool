@@ -145,6 +145,37 @@ impl Reading {
             check: report,
         }
     }
+
+    /// This reading with every line shifted by `delta`, which may be
+    /// negative. Readings are kept relative to the function's first line
+    /// (`relative_to(start)`, first line = 0) so that a function that moves
+    /// in its file keeps its reading, and placed back with `placed_at(start)`.
+    fn shifted(&self, delta: isize) -> Reading {
+        let move_line = |l: usize| l.saturating_add_signed(delta);
+        let mut out = self.clone();
+        for n in &mut out.notes {
+            n.line = move_line(n.line);
+        }
+        for s in &mut out.scenarios {
+            for step in &mut s.steps {
+                step.line = move_line(step.line);
+            }
+        }
+        out
+    }
+
+    /// The reading with lines counted from the function's first line (0).
+    /// This is the form a store keeps: it does not depend on where the
+    /// function sits in its file.
+    pub fn relative_to(&self, start_line: usize) -> Reading {
+        self.shifted(-isize::try_from(start_line).unwrap_or(isize::MAX))
+    }
+
+    /// The reading with file line numbers, for a function starting at
+    /// `start_line`. Inverse of [`Reading::relative_to`].
+    pub fn placed_at(&self, start_line: usize) -> Reading {
+        self.shifted(isize::try_from(start_line).unwrap_or(isize::MAX))
+    }
 }
 
 impl Function {
@@ -272,5 +303,31 @@ mod tests {
         assert_eq!(r.scenarios[0].steps.len(), 1);
         assert_eq!(r.check.dropped, 3);
         assert_eq!(r.function_hash, function().hash);
+    }
+
+    #[test]
+    fn a_reading_survives_its_function_moving_down_the_file() {
+        let draft = Draft {
+            notes: vec![note(11, Basis::Inference)],
+            scenarios: vec![Scenario {
+                kind: ScenarioKind::Normal,
+                title: "t".into(),
+                input: "i".into(),
+                steps: vec![Step {
+                    line: 12,
+                    what: "w".into(),
+                }],
+                outcome: "o".into(),
+                assumptions: vec![],
+            }],
+        };
+        let r = Reading::check(&function(), author(), draft);
+        let stored = r.relative_to(10);
+        assert_eq!(stored.notes[0].line, 1);
+        assert_eq!(stored.scenarios[0].steps[0].line, 2);
+        let moved = stored.placed_at(25);
+        assert_eq!(moved.notes[0].line, 26);
+        assert_eq!(moved.scenarios[0].steps[0].line, 27);
+        assert_eq!(stored.placed_at(10), r);
     }
 }

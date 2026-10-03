@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crt_domain::{Function, LanguageId, Reading};
+use crt_domain::{Author, Function, LanguageId, Reading};
 
 use crate::analyze_file::{AnalyzeError, FileAnalysis, analyze_file};
 use crate::ports::{
@@ -104,26 +104,25 @@ pub fn read_function(
         .ok_or_else(|| ReadError::NoSuchFunction(selector.clone()))?
         .clone();
     let mut warnings = Vec::new();
+    let authors = readers.explainer.authors();
 
-    let key = ReadingKey {
-        language: analysis.language.clone(),
-        function_hash: function.hash,
-        author: readers.explainer.author(),
-    };
     if !options.refresh {
-        match readers.store.get(&key) {
-            Ok(Some(reading)) => {
-                return Ok(FunctionReading {
-                    language: analysis.language,
-                    function,
-                    reading,
-                    from_cache: true,
-                    has_syntax_error: analysis.has_syntax_error,
-                    warnings,
-                });
-            }
-            Ok(None) => {}
-            Err(e) => warnings.push(e.to_string()),
+        let found = lookup(
+            readers.store,
+            &analysis.language,
+            &function,
+            &authors,
+            &mut warnings,
+        );
+        if let Some(reading) = found {
+            return Ok(FunctionReading {
+                language: analysis.language,
+                function,
+                reading,
+                from_cache: true,
+                has_syntax_error: analysis.has_syntax_error,
+                warnings,
+            });
         }
     }
 
@@ -141,12 +140,16 @@ pub fn read_function(
     let reading = Reading::check(&function, explained.author.clone(), explained.draft);
 
     // Stored under the author that actually wrote it, so a fallback's
-    // reading is never served later as the primary model's.
-    let stored_key = ReadingKey {
+    // reading is always labelled as the fallback's.
+    let key = ReadingKey {
+        language: analysis.language.clone(),
+        function_hash: function.hash,
         author: explained.author,
-        ..key
     };
-    if let Err(e) = readers.store.put(&stored_key, &reading) {
+    if let Err(e) = readers
+        .store
+        .put(&key, &reading.relative_to(function.span.start_line))
+    {
         warnings.push(e.to_string());
     }
     Ok(FunctionReading {
@@ -169,20 +172,46 @@ pub fn cached_readings(
     source: &[u8],
 ) -> Result<(FileAnalysis, Vec<Option<Reading>>), AnalyzeError> {
     let analysis = analyze_file(structure, path, source)?;
-    let author = explainer.author();
+    let authors = explainer.authors();
     let readings = analysis
         .functions
         .iter()
-        .map(|f| {
-            let key = ReadingKey {
-                language: analysis.language.clone(),
-                function_hash: f.hash,
-                author: author.clone(),
-            };
-            store.get(&key).ok().flatten()
-        })
+        .map(|f| lookup(store, &analysis.language, f, &authors, &mut Vec::new()))
         .collect();
     Ok((analysis, readings))
+}
+
+/// The stored reading for `function` by the first author that has one,
+/// placed at the function's current lines. A reading by a fallback author
+/// is returned with a warning saying so.
+fn lookup(
+    store: &dyn ReadingStore,
+    language: &LanguageId,
+    function: &Function,
+    authors: &[Author],
+    warnings: &mut Vec<String>,
+) -> Option<Reading> {
+    for (i, author) in authors.iter().enumerate() {
+        let key = ReadingKey {
+            language: language.clone(),
+            function_hash: function.hash,
+            author: author.clone(),
+        };
+        match store.get(&key) {
+            Ok(Some(stored)) => {
+                if i > 0 {
+                    warnings.push(format!(
+                        "cached reading of {} was written by fallback model {}",
+                        function.name, author.model
+                    ));
+                }
+                return Some(stored.placed_at(function.span.start_line));
+            }
+            Ok(None) => {}
+            Err(e) => warnings.push(e.to_string()),
+        }
+    }
+    None
 }
 
 fn select<'a>(analysis: &'a FileAnalysis, selector: &FunctionSelector) -> Option<&'a Function> {
@@ -276,16 +305,38 @@ mod tests {
         }
     }
 
+    /// `Fake`'s file with `n` empty lines inserted at the top.
+    struct Shifted(usize);
+    impl StructureSource for Shifted {
+        fn language_for(&self, p: &Path) -> Option<LanguageId> {
+            Fake.language_for(p)
+        }
+        fn structure(&self, l: &LanguageId, s: &[u8]) -> Result<Structure, StructureError> {
+            let mut st = Fake.structure(l, s)?;
+            for sym in &mut st.symbols {
+                sym.span.start_byte += self.0;
+                sym.span.end_byte += self.0;
+                sym.span.start_line += self.0;
+                sym.span.end_line += self.0;
+                sym.name_line += self.0;
+            }
+            Ok(st)
+        }
+    }
+
     struct Scripted {
         calls: RefCell<Vec<ExplainRequest>>,
         actual_model: &'static str,
     }
     impl Explainer for Scripted {
-        fn author(&self) -> Author {
-            Author {
-                model: "primary".into(),
-                prompt: "v1".into(),
-            }
+        fn authors(&self) -> Vec<Author> {
+            ["primary", "fallback"]
+                .into_iter()
+                .map(|m| Author {
+                    model: m.into(),
+                    prompt: "v1".into(),
+                })
+                .collect()
         }
         fn explain(&self, r: &ExplainRequest) -> Result<Explained, ExplainError> {
             self.calls.borrow_mut().push(r.clone());
@@ -379,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fallback_reading_is_not_served_as_the_primary_one() {
+    fn a_fallback_reading_is_found_again_and_labelled() {
         let explainer = scripted("fallback");
         let store = Memory::default();
         let readers = Readers {
@@ -404,8 +455,60 @@ mod tests {
             ReadOptions::default(),
         )
         .unwrap();
-        assert!(!again.from_cache);
-        assert_eq!(explainer.calls.borrow().len(), 2);
+        assert!(again.from_cache);
+        assert_eq!(again.reading.author.model, "fallback");
+        assert!(
+            again
+                .warnings
+                .iter()
+                .any(|w| w.contains("fallback model fallback"))
+        );
+        assert_eq!(explainer.calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_reading_follows_its_function_when_lines_are_added_above() {
+        let explainer = scripted("primary");
+        let store = Memory::default();
+        let readers = Readers {
+            structure: &Fake,
+            explainer: &explainer,
+            store: &store,
+        };
+        let sel = FunctionSelector::Name("f".into());
+        let first = read_function(
+            &readers,
+            Path::new("a.x"),
+            SRC,
+            &sel,
+            ReadOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(first.reading.notes[1].line, 3);
+
+        // Same function bytes, two lines lower.
+        let moved = Shifted(2);
+        let readers = Readers {
+            structure: &moved,
+            explainer: &explainer,
+            store: &store,
+        };
+        let src = [b"\n\n".as_slice(), SRC].concat();
+        let again = read_function(
+            &readers,
+            Path::new("a.x"),
+            &src,
+            &sel,
+            ReadOptions::default(),
+        )
+        .unwrap();
+        assert!(again.from_cache);
+        assert_eq!(again.function.span.start_line, 4);
+        assert_eq!(
+            again.reading.notes[1].line, 5,
+            "the note moved with its function"
+        );
+        assert_eq!(explainer.calls.borrow().len(), 1);
     }
 
     #[test]

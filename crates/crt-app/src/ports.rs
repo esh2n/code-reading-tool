@@ -77,9 +77,10 @@ pub struct Explained {
 
 /// Writes per-line notes and behaviour scenarios for a function.
 pub trait Explainer {
-    /// The author a reading would have if the primary endpoint answers.
-    /// Used to look up the cache before calling anything.
-    fn author(&self) -> Author;
+    /// Every author this explainer can write as, primary first, then the
+    /// fallbacks in order. Used to look up the cache before calling
+    /// anything.
+    fn authors(&self) -> Vec<Author>;
 
     fn explain(&self, request: &ExplainRequest) -> Result<Explained, ExplainError>;
 }
@@ -93,8 +94,10 @@ pub enum ExplainError {
     StructuredOutputUnsupported(String),
     /// The endpoint kept returning output that does not fit the schema.
     Malformed(String),
-    /// The endpoint refused the request (auth, quota, bad request).
+    /// The endpoint refused the request (auth, bad request).
     Rejected(String),
+    /// The configuration cannot be used as written.
+    Config(String),
 }
 
 impl fmt::Display for ExplainError {
@@ -109,6 +112,7 @@ impl fmt::Display for ExplainError {
             }
             Self::Malformed(m) => write!(f, "the LLM kept answering in the wrong shape: {m}"),
             Self::Rejected(m) => write!(f, "the LLM endpoint refused the request: {m}"),
+            Self::Config(m) => write!(f, "the LLM configuration cannot be used: {m}"),
         }
     }
 }
@@ -124,7 +128,9 @@ pub struct ReadingKey {
 }
 
 /// Keeps readings between runs. Best-effort: a failing store never fails
-/// a read.
+/// a read. Readings are handed over with lines relative to the function's
+/// first line (0 = first line; see `Reading::relative_to`), so a stored
+/// reading stays right when its function moves within the file.
 pub trait ReadingStore {
     fn get(&self, key: &ReadingKey) -> Result<Option<Reading>, StoreError>;
     fn put(&self, key: &ReadingKey, reading: &Reading) -> Result<(), StoreError>;

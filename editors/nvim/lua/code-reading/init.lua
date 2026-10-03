@@ -11,8 +11,9 @@ local state = require("code-reading.state")
 local M = {}
 
 local defaults = {
-  --- Command that starts the server.
-  cmd = { "crt", "lsp" },
+  --- Command that starts the server. Default: the binary installed by
+  --- :CrInstall if present, else `crt` on PATH.
+  cmd = nil,
   filetypes = { "rust", "go", "python", "javascript", "javascriptreact" },
   --- Read uncached functions in view without being asked.
   auto_read = true,
@@ -120,8 +121,17 @@ end
 
 M.scenario = scenario.open
 
+local function default_cmd()
+  local installed = require("code-reading.install").bin_path()
+  if vim.uv.fs_stat(installed) then
+    return { installed, "lsp" }
+  end
+  return { "crt", "lsp" }
+end
+
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+  M.config.cmd = M.config.cmd or default_cmd()
   render.define_highlights()
 
   vim.lsp.config("crt", {

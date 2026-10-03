@@ -1,5 +1,6 @@
 //! The HTTP side: one request per attempt, retries on a malformed answer,
-//! falls back to the next endpoint on transport or server errors.
+//! falls back to the next endpoint when one is down, rate-limited or not
+//! usable.
 
 use std::time::Duration;
 
@@ -18,24 +19,57 @@ use crate::prompt;
 const MALFORMED_RETRIES: usize = 2;
 
 pub struct OpenAiCompatible {
-    config: LlmConfig,
+    output_language: String,
+    endpoints: Vec<EndpointConfig>,
     http: Client,
 }
 
 impl OpenAiCompatible {
+    /// Checks the configuration and builds the client. An endpoint that
+    /// would receive an API key must use https, except on this machine.
     pub fn new(config: LlmConfig) -> Result<Self, ExplainError> {
+        let endpoints = config.endpoints();
+        for e in &endpoints {
+            check_endpoint(e)?;
+        }
         let http = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()
-            .map_err(|e| ExplainError::Unreachable(e.to_string()))?;
-        Ok(Self { config, http })
+            .map_err(|e| ExplainError::Config(chain(&e)))?;
+        Ok(Self {
+            output_language: config.output_language,
+            endpoints,
+            http,
+        })
     }
 
     fn author_for(&self, endpoint: &EndpointConfig) -> Author {
         Author {
             model: endpoint.model.clone(),
-            prompt: prompt::identity(&self.config.output_language),
+            prompt: prompt::identity(&self.output_language),
         }
+    }
+}
+
+fn check_endpoint(e: &EndpointConfig) -> Result<(), ExplainError> {
+    let url = reqwest::Url::parse(&e.base_url).map_err(|err| {
+        ExplainError::Config(format!("base_url {:?} is not a URL: {err}", e.base_url))
+    })?;
+    let local = matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
+    );
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if local || e.api_key_env.is_none() => Ok(()),
+        "http" => Err(ExplainError::Config(format!(
+            "{} sends an API key over plain http; use https (http is allowed only for localhost)",
+            e.base_url
+        ))),
+        other => Err(ExplainError::Config(format!(
+            "{}: unsupported scheme {other}",
+            e.base_url
+        ))),
     }
 }
 
@@ -44,37 +78,24 @@ enum Attempt {
     Ok(Draft),
     /// The answer did not fit the schema; worth asking the same endpoint again.
     Malformed(String),
-    /// Transport failure or server error; worth trying the next endpoint.
+    /// Not usable right now (unreachable, server error, rate limit, missing
+    /// key); worth trying the next endpoint.
     Down(String),
     /// A final answer for this request: no retry, no fallback.
     Fatal(ExplainError),
 }
 
 impl Explainer for OpenAiCompatible {
-    fn author(&self) -> Author {
-        self.author_for(&self.config.endpoints()[0])
+    fn authors(&self) -> Vec<Author> {
+        self.endpoints.iter().map(|e| self.author_for(e)).collect()
     }
 
     fn explain(&self, request: &ExplainRequest) -> Result<Explained, ExplainError> {
-        let body_for = |model: &str| {
-            json!({
-                "model": model,
-                "messages": [
-                    { "role": "system", "content": prompt::system(&self.config.output_language) },
-                    { "role": "user", "content": prompt::user(request) }
-                ],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": { "name": "function_reading", "strict": true, "schema": prompt::schema() }
-                }
-            })
-        };
-
         let mut warnings = Vec::new();
         let mut down = Vec::new();
-        for (i, endpoint) in self.config.endpoints().iter().enumerate() {
-            let body = body_for(&endpoint.model);
-            let mut last_malformed = String::new();
+        for (i, endpoint) in self.endpoints.iter().enumerate() {
+            let body = self.body(request, &endpoint.model);
+            let mut malformed: Option<String> = None;
             for attempt in 0..=MALFORMED_RETRIES {
                 match self.attempt(endpoint, &body) {
                     Attempt::Ok(draft) => {
@@ -97,20 +118,20 @@ impl Explainer for OpenAiCompatible {
                             warnings,
                         });
                     }
-                    Attempt::Malformed(m) => last_malformed = m,
+                    Attempt::Malformed(m) => malformed = Some(m),
                     Attempt::Down(m) => {
                         down.push(format!("{}: {m}", endpoint.base_url));
-                        last_malformed.clear();
+                        malformed = None;
                         break;
                     }
                     Attempt::Fatal(e) => return Err(e),
                 }
             }
-            if !last_malformed.is_empty() {
-                return Err(ExplainError::Malformed(format!(
-                    "{}: {last_malformed}",
-                    endpoint.model
-                )));
+            // A model that keeps answering in the wrong shape is a problem
+            // with that model, not an outage: report it rather than hide it
+            // behind a fallback.
+            if let Some(m) = malformed {
+                return Err(ExplainError::Malformed(format!("{}: {m}", endpoint.model)));
             }
         }
         Err(ExplainError::Unreachable(down.join("; ")))
@@ -118,6 +139,20 @@ impl Explainer for OpenAiCompatible {
 }
 
 impl OpenAiCompatible {
+    fn body(&self, request: &ExplainRequest, model: &str) -> Value {
+        json!({
+            "model": model,
+            "messages": [
+                { "role": "system", "content": prompt::system(&self.output_language) },
+                { "role": "user", "content": prompt::user(request) }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": { "name": "function_reading", "strict": true, "schema": prompt::schema() }
+            }
+        })
+    }
+
     fn attempt(&self, endpoint: &EndpointConfig, body: &Value) -> Attempt {
         let url = format!(
             "{}/chat/completions",
@@ -128,23 +163,26 @@ impl OpenAiCompatible {
             match std::env::var(var) {
                 Ok(key) if !key.is_empty() => req = req.bearer_auth(key),
                 _ => {
-                    return Attempt::Fatal(ExplainError::Rejected(format!(
+                    return Attempt::Down(format!(
                         "environment variable {var} (api_key_env for {}) is not set",
                         endpoint.model
-                    )));
+                    ));
                 }
             }
         }
         let response = match req.send() {
             Ok(r) => r,
-            Err(e) => return Attempt::Down(e.to_string()),
+            Err(e) => return Attempt::Down(chain(&e)),
         };
         let status = response.status();
         let text = match response.text() {
             Ok(t) => t,
-            Err(e) => return Attempt::Down(e.to_string()),
+            Err(e) => return Attempt::Down(chain(&e)),
         };
-        if status.is_server_error() {
+        if status.is_server_error()
+            || status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::REQUEST_TIMEOUT
+        {
             return Attempt::Down(format!("{status}: {}", snippet(&text)));
         }
         if status == StatusCode::BAD_REQUEST && mentions_structured_output(&text) {
@@ -161,11 +199,8 @@ impl OpenAiCompatible {
                 snippet(&text)
             )));
         }
-        match content_of(&text) {
-            Ok(content) => match prompt::parse(&content) {
-                Ok(draft) => Attempt::Ok(draft),
-                Err(e) => Attempt::Malformed(e),
-            },
+        match content_of(&text).and_then(|c| prompt::parse(&c)) {
+            Ok(draft) => Attempt::Ok(draft),
             Err(e) => Attempt::Malformed(e),
         }
     }
@@ -195,4 +230,17 @@ fn mentions_structured_output(body: &str) -> bool {
 
 fn snippet(text: &str) -> String {
     text.chars().take(300).collect()
+}
+
+/// The error and its causes on one line ("error sending request: ...:
+/// connection refused").
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(c) = cur {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cur = c.source();
+    }
+    out
 }

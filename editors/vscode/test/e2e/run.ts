@@ -70,15 +70,24 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(workspace, "p.go"), SOURCE);
   const config = path.join(work, "config.toml");
   fs.writeFileSync(config, `[llm]\nbase_url = "${llm.url}"\nmodel = "m"\n`);
+  // Machine-scoped settings are ignored in workspace settings by design, so
+  // they go in the test profile's user settings.
+  const userDir = path.join(work, "user");
+  fs.mkdirSync(path.join(userDir, "User"), { recursive: true });
   fs.writeFileSync(
-    path.join(workspace, ".vscode", "settings.json"),
-    JSON.stringify({ "codeReading.serverPath": crt, "codeReading.configPath": config }),
+    path.join(userDir, "User", "settings.json"),
+    JSON.stringify({
+      "codeReading.serverPath": crt,
+      "codeReading.configPath": config,
+      "codeReading.cacheDir": path.join(work, "cache"),
+      "security.workspace.trust.enabled": false,
+    }),
   );
   try {
     await runTests({
       extensionDevelopmentPath: root,
       extensionTestsPath: path.join(__dirname, "suite.js"),
-      launchArgs: [workspace, "--disable-extensions", "--user-data-dir", path.join(work, "user")],
+      launchArgs: [workspace, "--disable-extensions", "--user-data-dir", userDir],
       extensionTestsEnv: { CRT_TEST_FILE: path.join(workspace, "p.go") },
     });
   } finally {

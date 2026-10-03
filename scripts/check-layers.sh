@@ -31,9 +31,10 @@ check crt-wire     crt-domain crt-app serde
 check crt-treesitter crt-domain crt-app tree-sitter tree-sitter-tags \
   tree-sitter-rust tree-sitter-go tree-sitter-python tree-sitter-javascript
 
-check crt-store    crt-domain crt-app crt-wire serde_json
+check crt-store    crt-domain crt-app crt-wire serde serde_json tempfile
 check crt-llm      crt-domain crt-app reqwest serde serde_json
 check crt-lsp      crt-domain crt-app crt-wire serde serde_json tokio tower-lsp-server
+check crt-html     crt-wire minijinja serde
 
 if [ "$fail" -ne 0 ]; then
   exit 1

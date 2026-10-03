@@ -30,14 +30,14 @@ pub(crate) fn hover(function: &Function, reading: Option<&Reading>, line: usize)
                 Basis::Fact(_) => "fact",
                 _ => "guess",
             };
-            let mut s = format!("**{}** _({label})_", n.text);
+            let mut s = format!("**{}** _({label})_", md(&n.text));
             if let Some(d) = &n.detail {
-                s.push_str(&format!("\n\n{d}"));
+                s.push_str(&format!("\n\n{}", md(d)));
             }
             if !n.assumptions.is_empty() {
                 s.push_str("\n\nAssumes:");
                 for a in &n.assumptions {
-                    s.push_str(&format!("\n- {a}"));
+                    s.push_str(&format!("\n- {}", md(a)));
                 }
             }
             parts.push(s);
@@ -48,8 +48,8 @@ pub(crate) fn hover(function: &Function, reading: Option<&Reading>, line: usize)
                 s.push_str(&format!(
                     "\n- {}: {} → {}",
                     kind_name(sc.kind),
-                    sc.title,
-                    sc.outcome
+                    md(&sc.title),
+                    md(&sc.outcome)
                 ));
             }
             parts.push(s);
@@ -106,6 +106,39 @@ pub(crate) fn diagnostics(uri: &Uri, reading: &Reading) -> Vec<Diagnostic> {
             })
         })
         .collect()
+}
+
+/// Escapes text written by the model so it shows as text: no links, images,
+/// HTML or emphasis it did not ask for in plain words.
+fn md(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(
+            c,
+            '\\' | '`'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '#'
+                | '+'
+                | '-'
+                | '.'
+                | '!'
+                | '|'
+                | '<'
+                | '>'
+                | '~'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn kind_name(k: ScenarioKind) -> &'static str {
@@ -204,6 +237,16 @@ mod tests {
                 .contains("concurrent: two writers → lost update")
         );
         assert!(hover(&function(), None, 4).is_none());
+    }
+
+    #[test]
+    fn model_text_cannot_inject_links_images_or_html() {
+        let mut r = reading();
+        r.notes[0].text = "see ![x](https://evil/?d=1) <img src=x>".into();
+        let md = hover(&function(), Some(&r), 3).unwrap();
+        assert!(!md.contains("![x](https"), "{md}");
+        assert!(md.contains("\\!\\[x\\]\\(https"), "{md}");
+        assert!(md.contains("\\<img src=x\\>"), "{md}");
     }
 
     #[test]

@@ -63,6 +63,19 @@ enum Command {
         #[command(flatten)]
         at: Locations,
     },
+    /// Write one HTML page with the file's readings. Uses the cache; with
+    /// --read-missing, explains uncached functions first.
+    Render {
+        file: PathBuf,
+        /// Output file (default: stdout).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Explain functions that have no cached reading before rendering.
+        #[arg(long)]
+        read_missing: bool,
+        #[command(flatten)]
+        at: Locations,
+    },
     /// Serve the editor integration over LSP on stdin/stdout.
     Lsp {
         #[command(flatten)]
@@ -91,6 +104,12 @@ fn main() -> Result<()> {
         }
         Command::Cached { file, at } => cached(&file, &at),
         Command::Lsp { at } => lsp(&at),
+        Command::Render {
+            file,
+            out,
+            read_missing,
+            at,
+        } => render(&file, out.as_deref(), read_missing, &at),
         Command::Languages => {
             for l in TreeSitterSource::languages() {
                 println!("{}\t{}", l.id, l.extensions.join(","));
@@ -199,10 +218,71 @@ fn lsp(at: &Locations) -> Result<()> {
         explainer_unavailable,
         store,
     };
-    tokio::runtime::Builder::new_multi_thread()
+    // Hold one handle outside the runtime so the blocking HTTP client is
+    // dropped after the runtime is gone; dropping it inside the runtime
+    // panics.
+    let keep = services.clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("starting the async runtime")?
-        .block_on(crt_lsp::serve_stdio(services));
+        .context("starting the async runtime")?;
+    runtime.block_on(crt_lsp::serve_stdio(services));
+    drop(runtime);
+    drop(keep);
     Ok(())
+}
+
+fn render(file: &Path, out: Option<&Path>, read_missing: bool, at: &Locations) -> Result<()> {
+    let source = read_source(file)?;
+    let explainer = explainer(at)?;
+    let store = FileStore::new(config::cache_dir(at.cache_dir.as_deref())?);
+    let (analysis, mut readings) =
+        crt_app::cached_readings(&TreeSitterSource, &explainer, &store, file, &source)
+            .with_context(|| format!("analysing {}", file.display()))?;
+    if read_missing {
+        let readers = Readers {
+            structure: &TreeSitterSource,
+            explainer: &explainer,
+            store: &store,
+        };
+        for (function, reading) in analysis.functions.iter().zip(readings.iter_mut()) {
+            if reading.is_some() {
+                continue;
+            }
+            let selector = FunctionSelector::Line(function.span.start_line);
+            match crt_app::read_function(&readers, file, &source, &selector, ReadOptions::default())
+            {
+                Ok(r) => {
+                    for w in &r.warnings {
+                        eprintln!("warning: {w}");
+                    }
+                    *reading = Some(r.reading);
+                }
+                Err(e) => eprintln!("warning: {}: {:#}", function.name, anyhow::Error::from(e)),
+            }
+        }
+    }
+    let dto = FileAnalysisDto::from(&analysis);
+    let reading_dtos: Vec<Option<ReadingDto>> = readings
+        .iter()
+        .map(|r| r.as_ref().map(ReadingDto::from))
+        .collect();
+    let text = String::from_utf8_lossy(&source);
+    let title = file.display().to_string();
+    let html = crt_html::render(&crt_html::Page {
+        title: &title,
+        source: &text,
+        analysis: &dto,
+        readings: &reading_dtos,
+    })
+    .context("rendering HTML")?;
+    match out {
+        Some(path) => {
+            std::fs::write(path, html).with_context(|| format!("writing {}", path.display()))
+        }
+        None => {
+            print!("{html}");
+            Ok(())
+        }
+    }
 }

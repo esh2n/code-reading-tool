@@ -114,7 +114,7 @@ fn request() -> ExplainRequest {
 fn sends_a_strict_schema_and_parses_the_answer() {
     let s = serve(vec![(200, completion(GOOD))]);
     let llm = OpenAiCompatible::new(config(&s.url, None)).unwrap();
-    assert_eq!(llm.author().prompt, "v1-japanese");
+    assert_eq!(llm.authors()[0].prompt, "v1-japanese");
     let out = llm.explain(&request()).unwrap();
     assert_eq!(out.author.model, "primary-model");
     assert!(out.warnings.is_empty());
@@ -227,4 +227,69 @@ fn a_cut_off_answer_counts_as_malformed() {
         .explain(&request())
         .unwrap_err();
     assert!(err.to_string().contains("cut off"));
+}
+
+#[test]
+fn a_rate_limited_primary_falls_back() {
+    let primary = serve(vec![(429, "{\"error\":\"slow down\"}".into())]);
+    let fallback = serve(vec![(200, completion(GOOD))]);
+    let out = OpenAiCompatible::new(config(&primary.url, Some(&fallback.url)))
+        .unwrap()
+        .explain(&request())
+        .unwrap();
+    assert_eq!(out.author.model, "fallback-model");
+}
+
+#[test]
+fn a_missing_key_on_the_primary_moves_to_the_fallback() {
+    let fallback = serve(vec![(200, completion(GOOD))]);
+    let mut c = config("http://127.0.0.1:9/v1", Some(&fallback.url));
+    c.api_key_env = Some("CRT_TEST_KEY_THAT_IS_NOT_SET".into());
+    let out = OpenAiCompatible::new(c)
+        .unwrap()
+        .explain(&request())
+        .unwrap();
+    assert_eq!(out.author.model, "fallback-model");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("CRT_TEST_KEY_THAT_IS_NOT_SET"))
+    );
+}
+
+#[test]
+fn keys_are_never_sent_over_plain_http_to_another_host() {
+    let mut c = config("http://llm.example/v1", None);
+    c.api_key_env = Some("ANY".into());
+    let err = OpenAiCompatible::new(c).err().unwrap();
+    assert!(matches!(err, ExplainError::Config(_)), "{err}");
+    let mut local = config("http://localhost:4000/v1", None);
+    local.api_key_env = Some("ANY".into());
+    assert!(OpenAiCompatible::new(local).is_ok());
+    assert!(
+        OpenAiCompatible::new(config("http://llm.example/v1", None)).is_ok(),
+        "keyless http is allowed"
+    );
+    assert!(OpenAiCompatible::new(config("ftp://x/v1", None)).is_err());
+}
+
+#[test]
+fn authors_list_the_primary_then_the_fallbacks() {
+    let llm = OpenAiCompatible::new(config(
+        "http://127.0.0.1:9/v1",
+        Some("http://127.0.0.1:8/v1"),
+    ))
+    .unwrap();
+    let models: Vec<_> = llm.authors().into_iter().map(|a| a.model).collect();
+    assert_eq!(models, vec!["primary-model", "fallback-model"]);
+}
+
+#[test]
+fn an_unreachable_endpoint_reports_the_underlying_cause() {
+    let err = OpenAiCompatible::new(config("http://127.0.0.1:9/v1", None))
+        .unwrap()
+        .explain(&request())
+        .unwrap_err();
+    let msg = err.to_string().to_ascii_lowercase();
+    assert!(msg.contains("connect") || msg.contains("refused"), "{msg}");
 }

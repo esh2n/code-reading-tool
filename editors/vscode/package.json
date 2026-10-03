@@ -49,12 +49,20 @@
         "codeReading.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the crt binary. Empty uses the bundled one, then crt on PATH."
+          "description": "Path to the crt binary. Empty uses the bundled one, then crt on PATH. Machine-level only: a workspace cannot change which program runs.",
+          "scope": "machine"
         },
         "codeReading.configPath": {
           "type": "string",
           "default": "",
-          "description": "Path to crt's configuration file. Empty uses the platform default."
+          "description": "Path to crt's configuration file. Empty uses the platform default. Machine-level only: a workspace cannot redirect source code or keys to another endpoint.",
+          "scope": "machine"
+        },
+        "codeReading.cacheDir": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Where explanations are cached. Empty uses the platform cache directory."
         },
         "codeReading.autoRead": {
           "type": "boolean",
@@ -89,5 +97,12 @@
     "esbuild": "0.28.2",
     "mocha": "^12.0.3",
     "typescript": "7.0.2"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Code Reading starts a local binary and sends source code to the LLM endpoint you configured."
+    },
+    "virtualWorkspaces": false
   }
 }

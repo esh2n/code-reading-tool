@@ -4,12 +4,24 @@
 //! reading behind.
 
 use std::fs;
-use std::io::Write;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use crt_app::{ReadingKey, ReadingStore, StoreError};
 use crt_domain::Reading;
 use crt_wire::ReadingDto;
+
+/// Version of the on-disk shape. Files with another version are ignored
+/// (and overwritten on the next read), never misread.
+/// 1: lines absolute in the file (never released). 2: lines relative to the
+/// function's first line.
+const FORMAT: u32 = 2;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Stored {
+    format: u32,
+    reading: ReadingDto,
+}
 
 pub struct FileStore {
     root: PathBuf,
@@ -38,8 +50,12 @@ impl ReadingStore for FileStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(err(&path, e)),
         };
-        let dto: ReadingDto = serde_json::from_slice(&bytes).map_err(|e| err(&path, e))?;
-        let reading = Reading::try_from(dto).map_err(|e| err(&path, e))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| err(&path, e))?;
+        if value.get("format").and_then(serde_json::Value::as_u64) != Some(u64::from(FORMAT)) {
+            return Ok(None);
+        }
+        let stored: Stored = serde_json::from_value(value).map_err(|e| err(&path, e))?;
+        let reading = Reading::try_from(stored.reading).map_err(|e| err(&path, e))?;
         // A file renamed or copied by hand must not answer for other source.
         if reading.function_hash != key.function_hash || reading.author != key.author {
             return Ok(None);
@@ -51,13 +67,20 @@ impl ReadingStore for FileStore {
         let path = self.path_for(key);
         let dir = path.parent().unwrap_or(&self.root);
         fs::create_dir_all(dir).map_err(|e| err(dir, e))?;
-        let json =
-            serde_json::to_vec_pretty(&ReadingDto::from(reading)).map_err(|e| err(&path, e))?;
-        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-        let mut file = fs::File::create(&tmp).map_err(|e| err(&tmp, e))?;
-        file.write_all(&json).map_err(|e| err(&tmp, e))?;
-        file.sync_all().map_err(|e| err(&tmp, e))?;
-        fs::rename(&tmp, &path).map_err(|e| err(&path, e))
+        let stored = Stored {
+            format: FORMAT,
+            reading: ReadingDto::from(reading),
+        };
+        let json = serde_json::to_vec_pretty(&stored).map_err(|e| err(&path, e))?;
+        // A uniquely named temporary file in the same directory, renamed
+        // into place: concurrent writers never share it, and a failure
+        // removes it.
+        let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| err(dir, e))?;
+        tmp.write_all(&json).map_err(|e| err(tmp.path(), e))?;
+        tmp.as_file().sync_all().map_err(|e| err(tmp.path(), e))?;
+        tmp.persist(&path)
+            .map(|_| ())
+            .map_err(|e| err(&path, e.error))
     }
 }
 
@@ -126,6 +149,20 @@ mod tests {
         let path = store.path_for(&key("../../etc/passwd"));
         assert!(path.starts_with(dir.path()));
         assert_eq!(path.parent().unwrap(), dir.path().join("go"));
+    }
+
+    #[test]
+    fn a_file_in_another_format_is_a_miss_not_a_misread() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileStore::new(dir.path());
+        let path = store.path_for(&key("m"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // The unversioned shape written before formats existed.
+        let old = serde_json::to_vec(&ReadingDto::from(&reading("m"))).unwrap();
+        fs::write(&path, old).unwrap();
+        assert_eq!(store.get(&key("m")).unwrap(), None);
+        store.put(&key("m"), &reading("m")).unwrap();
+        assert_eq!(store.get(&key("m")).unwrap(), Some(reading("m")));
     }
 
     #[test]

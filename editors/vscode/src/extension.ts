@@ -187,6 +187,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
   const args = ["lsp"];
   const configPath = settings.get<string>("configPath");
   if (configPath) args.push("--config", configPath);
+  const cacheDir = settings.get<string>("cacheDir");
+  if (cacheDir) args.push("--cache-dir", cacheDir);
   const server: ServerOptions = { command: serverPath(context), args };
   const options: LanguageClientOptions = {
     documentSelector: SELECTOR,
