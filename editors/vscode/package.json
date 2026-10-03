@@ -62,7 +62,7 @@
         "codeReading.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show explanations at the end of lines and write them for the code in view. When off, nothing is shown and the model is called only when you ask (Explain Function, Show Scenario). The status bar item switches it."
+          "description": "Show explanations at the end of lines and in the Problems panel, and write them for the code in view. When off, they are hidden and the model is called only when you ask (Explain Function, Show Scenario); hovering still shows a line's explanation. The status bar item switches it."
         },
         "codeReading.serverPath": {
           "type": "string",

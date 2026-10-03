@@ -52,6 +52,17 @@ const latest = new Map<string, FileReadingsParams>();
 /** `codeReading.enabled`: annotations shown and auto-read on. */
 let enabled = true;
 let status: vscode.StatusBarItem | undefined;
+/** The last diagnostics the server sent for each document. */
+const serverDiagnostics = new Map<string, vscode.Diagnostic[]>();
+
+/** Shows or hides the server's diagnostics to match `enabled`. */
+function applyDiagnostics(): void {
+  const collection = client?.diagnostics;
+  if (!collection) return;
+  for (const [uri, diagnostics] of serverDiagnostics) {
+    collection.set(vscode.Uri.parse(uri), enabled ? diagnostics : []);
+  }
+}
 
 function readEnabled(): boolean {
   return vscode.workspace.getConfiguration("codeReading").get<boolean>("enabled", true);
@@ -285,6 +296,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
       autoRead: settings.get<boolean>("autoRead", true),
       maxParallel: settings.get<number>("maxParallel", 2),
     },
+    middleware: {
+      // The server's diagnostics (concurrency scenarios) are kept, and shown
+      // only while explanations are on.
+      handleDiagnostics: (uri, diagnostics, next) => {
+        serverDiagnostics.set(uri.toString(), diagnostics);
+        next(uri, enabled ? diagnostics : []);
+      },
+    },
   };
   client = new LanguageClient("crt", "Code Reading", server, options);
 
@@ -331,6 +350,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<TestAp
       if (!e.affectsConfiguration("codeReading.enabled")) return;
       enabled = readEnabled();
       renderAll();
+      applyDiagnostics();
       updateStatus();
       if (enabled) for (const editor of vscode.window.visibleTextEditors) reportView(editor);
     }),

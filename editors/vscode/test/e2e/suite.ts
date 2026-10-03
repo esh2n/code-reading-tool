@@ -100,8 +100,10 @@ export async function run(): Promise<void> {
   await vscode.commands.executeCommand("codeReading.toggle");
   await until(() => (api.statusText() === "Code Reading: off" ? true : undefined), 5000, "explanations off");
   assert.equal(vscode.workspace.getConfiguration("codeReading").get("enabled"), false);
+  assert.equal(vscode.languages.getDiagnostics(doc.uri).length, 0, "diagnostics hidden while off");
   await vscode.commands.executeCommand("codeReading.toggle");
   await until(() => (api.statusText() === "Code Reading: on" ? true : undefined), 5000, "explanations on");
+  assert.ok(vscode.languages.getDiagnostics(doc.uri).length > 0, "diagnostics back when on");
 
   // The configuration file opens from a command.
   await vscode.commands.executeCommand("codeReading.openConfig");

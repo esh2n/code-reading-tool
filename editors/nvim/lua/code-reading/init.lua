@@ -18,9 +18,9 @@ local defaults = {
     "rust", "go", "python", "javascript", "javascriptreact", "typescript", "typescriptreact",
     "java", "c", "cpp", "cs", "ruby", "php",
   },
-  --- Show explanations and write them for the code in view. When off,
-  --- nothing is shown and the model is called only when asked (:CrRead,
-  --- :CrScenario). :CrToggle switches it.
+  --- Show explanations (line ends, diagnostics) and write them for the code
+  --- in view. When off, they are hidden and the model is called only when
+  --- asked (:CrRead, :CrScenario); hover still works. :CrToggle switches it.
   enabled = true,
   --- Read uncached functions in view without being asked.
   auto_read = true,
@@ -143,8 +143,19 @@ function M.open_config()
   end, bufnr)
 end
 
+--- Shows or hides the crt server's diagnostics (concurrency scenarios) to
+--- match `state.enabled`. Hover is left alone: it is asked for.
+local function apply_diagnostics()
+  for _, client in ipairs(vim.lsp.get_clients({ name = "crt" })) do
+    for _, pull in ipairs({ false, true }) do
+      vim.diagnostic.enable(state.enabled, { ns_id = vim.lsp.diagnostic.get_namespace(client.id, pull) })
+    end
+  end
+end
+
 function M.toggle()
   state.enabled = not state.enabled
+  apply_diagnostics()
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(bufnr) then
       render.draw(bufnr)
@@ -218,6 +229,7 @@ function M.setup(opts)
     callback = function(args)
       local client = vim.lsp.get_client_by_id(args.data.client_id)
       if client and client.name == "crt" then
+        apply_diagnostics()
         schedule_view(args.buf)
       end
     end,

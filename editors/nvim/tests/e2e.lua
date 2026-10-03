@@ -115,8 +115,12 @@ check(cr.status() == "crt on", "status: " .. cr.status())
 cr.toggle()
 check(#vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, {}) == 0, "toggle did not hide")
 check(cr.status() == "crt off", "status: " .. cr.status())
+check(#vim.diagnostic.get(buf) > 0 and not vim.diagnostic.is_enabled({
+  ns_id = vim.lsp.diagnostic.get_namespace(client.id, false),
+}), "diagnostics still shown while off")
 cr.toggle()
 check(#vim.api.nvim_buf_get_extmarks(buf, render.ns, 0, -1, {}) > 0, "toggle did not show")
+check(vim.diagnostic.is_enabled({ ns_id = vim.lsp.diagnostic.get_namespace(client.id, false) }), "diagnostics not back")
 
 -- :CrConfig opens the configuration file the server reads.
 vim.api.nvim_set_current_buf(buf)
