@@ -1,0 +1,18 @@
+[package]
+name = "crt-wire"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "JSON shapes shared by the CLI, the LSP custom methods and the HTML renderer."
+
+[dependencies]
+crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

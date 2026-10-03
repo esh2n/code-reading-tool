@@ -1,0 +1,20 @@
+[package]
+name = "crt-treesitter"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "StructureSource adapter: bundled tree-sitter grammars and tags queries."
+
+[dependencies]
+crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
+tree-sitter = "0.27"
+tree-sitter-tags = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+
+[lints]
+workspace = true

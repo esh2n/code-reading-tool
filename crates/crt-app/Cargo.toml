@@ -1,0 +1,13 @@
+[package]
+name = "crt-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Use cases and the ports they need. Depends only on crt-domain."
+
+[dependencies]
+crt-domain = { path = "../crt-domain" }
+
+[lints]
+workspace = true

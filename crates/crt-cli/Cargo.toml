@@ -4,13 +4,23 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "The crt command: composition root for the CLI."
 
 [[bin]]
 name = "crt"
 path = "src/main.rs"
 
 [dependencies]
-crt-core = { path = "../crt-core" }
+crt-app = { path = "../crt-app" }
+crt-domain = { path = "../crt-domain" }
+crt-treesitter = { path = "../crt-treesitter" }
+crt-wire = { path = "../crt-wire" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
 
 [lints]
 workspace = true
