@@ -40,6 +40,7 @@ const SELECTOR = [
   "csharp",
   "ruby",
   "php",
+  "shellscript",
 ].map((language) => ({
   scheme: "file",
   language,

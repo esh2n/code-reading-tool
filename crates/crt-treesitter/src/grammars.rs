@@ -136,6 +136,14 @@ const GRAMMARS: &[Grammar] = &[
         owner_query: None,
         locals_query: "",
     },
+    Grammar {
+        id: "bash",
+        extensions: &["sh", "bash"],
+        language: || tree_sitter_bash::LANGUAGE.into(),
+        tags: &[include_str!("../queries/bash/tags.scm")],
+        owner_query: None,
+        locals_query: "",
+    },
 ];
 
 pub(crate) fn all() -> &'static [Grammar] {
@@ -165,6 +173,7 @@ mod tests {
         assert_eq!(for_path(Path::new("x.tsx")).map(|g| g.id), Some("tsx"));
         assert_eq!(for_path(Path::new("x.hpp")).map(|g| g.id), Some("cpp"));
         assert_eq!(for_path(Path::new("x.cs")).map(|g| g.id), Some("csharp"));
+        assert_eq!(for_path(Path::new("x.sh")).map(|g| g.id), Some("bash"));
         assert!(for_path(Path::new("notes.txt")).is_none());
         assert!(for_path(Path::new("Makefile")).is_none());
     }

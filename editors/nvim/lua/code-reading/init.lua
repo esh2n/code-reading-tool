@@ -16,7 +16,7 @@ local defaults = {
   cmd = nil,
   filetypes = {
     "rust", "go", "python", "javascript", "javascriptreact", "typescript", "typescriptreact",
-    "java", "c", "cpp", "cs", "ruby", "php",
+    "java", "c", "cpp", "cs", "ruby", "php", "sh", "bash",
   },
   --- Show explanations (line ends, diagnostics) and write them for the code
   --- in view. When off, they are hidden and the model is called only when

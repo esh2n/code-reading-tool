@@ -31,7 +31,7 @@ check crt-wire     crt-domain crt-app serde
 check crt-treesitter crt-domain crt-app tree-sitter tree-sitter-tags \
   tree-sitter-rust tree-sitter-go tree-sitter-python tree-sitter-javascript \
   tree-sitter-typescript tree-sitter-java tree-sitter-c tree-sitter-cpp tree-sitter-c-sharp \
-  tree-sitter-ruby tree-sitter-php
+  tree-sitter-ruby tree-sitter-php tree-sitter-bash
 
 check crt-store    crt-domain crt-app crt-wire serde serde_json tempfile
 check crt-llm      crt-domain crt-app reqwest serde serde_json

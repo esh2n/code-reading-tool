@@ -31,7 +31,8 @@
     "onLanguage:cpp",
     "onLanguage:csharp",
     "onLanguage:ruby",
-    "onLanguage:php"
+    "onLanguage:php",
+    "onLanguage:shellscript"
   ],
   "contributes": {
     "commands": [

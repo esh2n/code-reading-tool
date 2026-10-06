@@ -174,3 +174,17 @@ fn php() {
         ],
     );
 }
+
+#[test]
+fn bash() {
+    // Both definition forms; `$runner` is an expansion, not a call by name.
+    let src = "#!/usr/bin/env bash\nsave() {\n  validate \"$1\"\n  \"$runner\" put \"$1\"\n}\n\nfunction validate {\n  check \"$1\" || return 1\n}\n";
+    check(
+        "a.sh",
+        src,
+        &[
+            ("save", None, 2, 5, vec![(3, vec!["validate"])]),
+            ("validate", None, 7, 9, vec![(8, vec!["check"])]),
+        ],
+    );
+}
